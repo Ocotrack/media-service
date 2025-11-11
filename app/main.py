@@ -1,10 +1,14 @@
 import io
 import uuid
 import os
-from datetime import timedelta
+import time
+import hmac
+import hashlib
+import base64
 from typing import Optional, Tuple, Dict
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Header, Depends, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from minio import Minio
 from minio.error import S3Error
@@ -15,17 +19,14 @@ from redis import Redis
 # ================== Load environment ==================
 load_dotenv()
 
-# ===== MinIO =====
+# ----- MinIO -----
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
 MINIO_USE_SSL = os.getenv("MINIO_USE_SSL", "false").lower() == "true"
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "media")
 
-if not MINIO_ENDPOINT or not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
-    raise RuntimeError("MinIO configuration is incomplete. Check MINIO_* env vars.")
-
-# ===== Redis =====
+# ----- Redis -----
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
@@ -39,7 +40,7 @@ redis_client = Redis(
     decode_responses=True,
 )
 
-# ===== API Keys =====
+# ----- API Keys -----
 RAW_API_KEYS = os.getenv("API_KEYS", "")
 API_KEYS_MAP: Dict[str, str] = {}
 
@@ -60,10 +61,17 @@ if RAW_API_KEYS:
 if not API_KEYS_MAP:
     print("WARNING: No API keys configured. Set API_KEYS in .env for production.")
 
-# ===== Signed URL TTL (en segundos) =====
+# ----- CDN / Signed URLs -----
+# Debe apuntar a tu origen público o CDN, por ejemplo:
+# CDN_BASE_URL=https://cdn.meximova.com/media
+CDN_BASE_URL = os.getenv("ORIGIN_BASE_URL", "https://cdn.meximova.com/media").rstrip("/")
+MEDIA_URL_SIGNING_SECRET = os.getenv("MEDIA_URL_SIGNING_SECRET")
 MEDIA_URL_TTL_SECONDS = int(os.getenv("MEDIA_URL_TTL_SECONDS", "300"))
 
 # ================== MinIO Client ==================
+if not MINIO_ENDPOINT or not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
+    raise RuntimeError("MinIO configuration is incomplete. Check MINIO_* env vars.")
+
 minio_client = Minio(
     MINIO_ENDPOINT,
     access_key=MINIO_ACCESS_KEY,
@@ -78,12 +86,7 @@ if not minio_client.bucket_exists(MINIO_BUCKET):
 # ================== FastAPI ==================
 app = FastAPI(
     title="Media Storage Service",
-    description=(
-        "Microservicio para gestionar media comprimida con MinIO.\n"
-        "- Protegido por API Key por proyecto (X-Api-Key).\n"
-        "- Cada request debe incluir X-User-Id (usuario autenticado por el sistema origen).\n"
-        "- Genera URLs firmadas temporales usando MinIO (bucket privado)."
-    ),
+    description="Microservicio para media comprimida con MinIO, autenticado por API Key y URLs firmadas.",
     version="2.0.0",
 )
 
@@ -92,7 +95,7 @@ class MediaItem(BaseModel):
     id: str
     filename: str
     content_type: str
-    path: str        # Internal path (object_name en MinIO)
+    path: str        # Internal path (no URL)
     user_id: str
     client_id: str
     folder: str
@@ -206,28 +209,27 @@ def delete_from_minio(path: str):
         raise HTTPException(status_code=500, detail="Delete from MinIO failed") from e
 
 
-# ================== Signed URL (MinIO nativo) ==================
+# ================== Signed URL ==================
 def generate_signed_url(path: str) -> str:
-    """
-    Genera una URL firmada usando MinIO para un objeto en el bucket privado.
-    """
-    try:
-        url = minio_client.presigned_get_object(
-            bucket_name=MINIO_BUCKET,
-            object_name=path,
-            expires=timedelta(seconds=MEDIA_URL_TTL_SECONDS),
-        )
-        return url
-    except S3Error as e:
-        raise HTTPException(status_code=500, detail="Failed to generate signed URL") from e
+    if not CDN_BASE_URL:
+        raise HTTPException(status_code=500, detail="CDN_BASE_URL not configured")
+    if not MEDIA_URL_SIGNING_SECRET:
+        raise HTTPException(status_code=500, detail="MEDIA_URL_SIGNING_SECRET not configured")
+
+    expires = int(time.time()) + MEDIA_URL_TTL_SECONDS
+    data = f"{path}:{expires}"
+    sig = hmac.new(
+        key=MEDIA_URL_SIGNING_SECRET.encode("utf-8"),
+        msg=data.encode("utf-8"),
+        digestmod=hashlib.sha256,
+    ).digest()
+    sig_b64 = base64.urlsafe_b64encode(sig).decode("utf-8").rstrip("=")
+
+    return f"{CDN_BASE_URL}/{path}?exp={expires}&sig={sig_b64}"
 
 
 # ================== Endpoints ==================
-@app.post(
-    "/media",
-    response_model=MediaItem,
-    summary="Upload media (returns internal path only)",
-)
+@app.post("/media", response_model=MediaItem, summary="Upload media (returns internal path only)")
 async def upload_media(
     file: UploadFile = File(...),
     client_id: str = Depends(get_client_id),
@@ -256,24 +258,19 @@ async def upload_media(
     return item
 
 
-@app.get(
-    "/media/url",
-    summary="Generate MinIO presigned URL for a given path (secured by API Key + User)",
-)
+@app.get("/media/url", summary="Generate signed URL for a given path")
 async def generate_media_url(
     path: str = Query(...),
     client_id: str = Depends(get_client_id),
     user_id: str = Depends(get_current_user),
 ):
-    # Verificar que el media exista en Redis (metadatos)
     item = get_media_by_path(path)
     if not item:
         raise HTTPException(status_code=404, detail="Media not found")
 
-    # Verificar que pertenezca a ese cliente y usuario
+    # Validar que el media pertenezca a ese cliente y usuario
     if item.client_id != client_id or item.user_id != user_id:
         raise HTTPException(status_code=403, detail="Unauthorized for this path")
 
-    # Generar URL firmada usando MinIO
     url = generate_signed_url(path)
     return {"url": url, "expires_in": MEDIA_URL_TTL_SECONDS}
