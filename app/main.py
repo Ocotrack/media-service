@@ -62,11 +62,16 @@ if not API_KEYS_MAP:
     print("WARNING: No API keys configured. Set API_KEYS in .env for production.")
 
 # ----- CDN / Signed URLs -----
-CDN_BASE_URL = os.getenv("ORIGIN_BASE_URL", "").rstrip("/")
+# Debe apuntar a tu origen público o CDN, por ejemplo:
+# CDN_BASE_URL=https://cdn.meximova.com/media
+CDN_BASE_URL = os.getenv("CDN_BASE_URL", "").rstrip("/")
 MEDIA_URL_SIGNING_SECRET = os.getenv("MEDIA_URL_SIGNING_SECRET")
 MEDIA_URL_TTL_SECONDS = int(os.getenv("MEDIA_URL_TTL_SECONDS", "300"))
 
 # ================== MinIO Client ==================
+if not MINIO_ENDPOINT or not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
+    raise RuntimeError("MinIO configuration is incomplete. Check MINIO_* env vars.")
+
 minio_client = Minio(
     MINIO_ENDPOINT,
     access_key=MINIO_ACCESS_KEY,
@@ -74,13 +79,14 @@ minio_client = Minio(
     secure=MINIO_USE_SSL,
 )
 
+# Crea el bucket si no existe
 if not minio_client.bucket_exists(MINIO_BUCKET):
     minio_client.make_bucket(MINIO_BUCKET)
 
 # ================== FastAPI ==================
 app = FastAPI(
     title="Media Storage Service",
-    description="Microservice for media compression, MinIO storage, API Key security, and signed CDN URLs.",
+    description="Microservicio para media comprimida con MinIO, autenticado por API Key y URLs firmadas.",
     version="2.0.0",
 )
 
@@ -205,6 +211,11 @@ def delete_from_minio(path: str):
 
 # ================== Signed URL ==================
 def generate_signed_url(path: str) -> str:
+    if not CDN_BASE_URL:
+        raise HTTPException(status_code=500, detail="CDN_BASE_URL not configured")
+    if not MEDIA_URL_SIGNING_SECRET:
+        raise HTTPException(status_code=500, detail="MEDIA_URL_SIGNING_SECRET not configured")
+
     expires = int(time.time()) + MEDIA_URL_TTL_SECONDS
     data = f"{path}:{expires}"
     sig = hmac.new(
@@ -213,6 +224,7 @@ def generate_signed_url(path: str) -> str:
         digestmod=hashlib.sha256,
     ).digest()
     sig_b64 = base64.urlsafe_b64encode(sig).decode("utf-8").rstrip("=")
+
     return f"{CDN_BASE_URL}/{path}?exp={expires}&sig={sig_b64}"
 
 
@@ -226,10 +238,13 @@ async def upload_media(
 ):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Only image files allowed")
+
     compressed, new_type = await compress_image(file)
     media_id = str(uuid.uuid4())
     path = build_object_path(client_id, folder, user_id, media_id)
+
     upload_to_minio(path, compressed, new_type)
+
     item = MediaItem(
         id=media_id,
         filename=file.filename,
@@ -252,7 +267,10 @@ async def generate_media_url(
     item = get_media_by_path(path)
     if not item:
         raise HTTPException(status_code=404, detail="Media not found")
+
+    # Validar que el media pertenezca a ese cliente y usuario
     if item.client_id != client_id or item.user_id != user_id:
         raise HTTPException(status_code=403, detail="Unauthorized for this path")
+
     url = generate_signed_url(path)
     return {"url": url, "expires_in": MEDIA_URL_TTL_SECONDS}
