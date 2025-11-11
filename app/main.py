@@ -213,7 +213,7 @@ def generate_signed_url(path: str) -> str:
         digestmod=hashlib.sha256,
     ).digest()
     sig_b64 = base64.urlsafe_b64encode(sig).decode("utf-8").rstrip("=")
-    return f"{ORIGIN_BASE_URL}/{path}?exp={expires}&sig={sig_b64}"
+    return f"{CDN_BASE_URL}/{path}?exp={expires}&sig={sig_b64}"
 
 
 # ================== Endpoints ==================
