@@ -30,22 +30,30 @@ services:
       - minio
       - redis
     environment:
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT}     
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       MINIO_USE_SSL: ${MINIO_USE_SSL}
       MINIO_BUCKET: ${MINIO_BUCKET}
-      PUBLIC_BASE_URL: ${ORIGIN_BASE_URL}
+
+      ORIGIN_BASE_URL: ${ORIGIN_BASE_URL}
+
+      MEDIA_URL_SIGNING_SECRET: ${MEDIA_URL_SIGNING_SECRET}
+      MEDIA_URL_TTL_SECONDS: ${MEDIA_URL_TTL_SECONDS}
+
       API_KEYS: ${API_KEYS}
+
       REDIS_HOST: ${REDIS_HOST}
       REDIS_PORT: ${REDIS_PORT}
       REDIS_DB: ${REDIS_DB}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
-      PORT: ${PORT}                      
+
+      PORT: ${PORT}
       ENV: ${ENV}
     ports:
-      - "8002:8002"                
+      - "8002:8002"
     restart: unless-stopped
+
 
 volumes:
   minio_data:
