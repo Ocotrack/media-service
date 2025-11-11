@@ -9,8 +9,8 @@ services:
     volumes:
       - minio_data:/data
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9001:9001"   # API
+      - "9002:9002"   # Consola Web
     restart: unless-stopped
 
   redis:
@@ -21,31 +21,32 @@ services:
       - "6379:6379"
     restart: unless-stopped
 
-  media-service:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: media-service
-    depends_on:
-      - minio
-      - redis
-    environment:
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
-      MINIO_USE_SSL: ${MINIO_USE_SSL}
-      MINIO_BUCKET: ${MINIO_BUCKET}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
-      API_KEYS: ${API_KEYS}
-      REDIS_HOST: ${REDIS_HOST}
-      REDIS_PORT: ${REDIS_PORT}
-      REDIS_DB: ${REDIS_DB}
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-      PORT: ${PORT}
-      ENV: ${ENV}
-    ports:
-      - "8000:8000"
-    restart: unless-stopped
+media-service:
+  build:
+    context: .
+    dockerfile: Dockerfile
+  container_name: media-service
+  depends_on:
+    - minio
+    - redis
+  environment:
+    MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+    MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+    MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+    MINIO_USE_SSL: ${MINIO_USE_SSL}
+    MINIO_BUCKET: ${MINIO_BUCKET}
+    PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+    API_KEYS: ${API_KEYS}
+    REDIS_HOST: ${REDIS_HOST}
+    REDIS_PORT: ${REDIS_PORT}
+    REDIS_DB: ${REDIS_DB}
+    REDIS_PASSWORD: ${REDIS_PASSWORD}
+    PORT: 8002        
+    ENV: ${ENV}
+  ports:
+    - "8002:8002"
+  restart: unless-stopped
+
 
 volumes:
   minio_data:
