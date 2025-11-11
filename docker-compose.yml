@@ -3,14 +3,14 @@ services:
     image: minio/minio:latest
     container_name: minio
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
-    command: server /data --console-address ":9001"
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    command: server /data --address ":9003" --console-address ":9004"
     volumes:
       - minio_data:/data
     ports:
-      - "9001:9001"   # API
-      - "9002:9002"   # Consola Web
+      - "9003:9003"   # API MinIO accesible en host
+      - "9004:9004"   # Consola MinIO accesible en host
     restart: unless-stopped
 
   redis:
@@ -30,7 +30,7 @@ services:
       - minio
       - redis
     environment:
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}     
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       MINIO_USE_SSL: ${MINIO_USE_SSL}
@@ -41,12 +41,11 @@ services:
       REDIS_PORT: ${REDIS_PORT}
       REDIS_DB: ${REDIS_DB}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
-      PORT: 8002        
+      PORT: ${PORT}                      
       ENV: ${ENV}
     ports:
-      - "8002:8002"
+      - "8002:8002"                
     restart: unless-stopped
-
 
 volumes:
   minio_data:
