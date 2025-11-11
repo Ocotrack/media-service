@@ -47,7 +47,7 @@ services:
       PORT: ${PORT}
       ENV: ${ENV}
 
-      PUBLIC_MINIO_ENDPOINT: http://casamagoswiss.ddns.net:9003
+      PUBLIC_MINIO_ENDPOINT: ${PUBLIC_MINIO_ENDPOINT}
 
     ports:
       - "8002:8002"
