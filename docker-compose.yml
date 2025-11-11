@@ -43,9 +43,9 @@ media-service:
     REDIS_PASSWORD: ${REDIS_PASSWORD}
     PORT: 8002        
     ENV: ${ENV}
-  ports:
-    - "8002:8002"
-  restart: unless-stopped
+    ports:
+      - "8002:8002"
+    restart: unless-stopped
 
 
 volumes:
