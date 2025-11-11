@@ -215,33 +215,15 @@ def delete_from_minio(path: str):
 def generate_signed_url(path: str) -> str:
     """
     Genera una URL firmada usando MinIO para un objeto en el bucket privado.
-    Si PUBLIC_MINIO_ENDPOINT / ORIGIN_BASE_URL está configurado, reemplaza
-    el host interno (minio:9003) por el host público (ej. casamagoswiss.ddns.net:9003).
     """
     try:
-        internal_url = minio_client.presigned_get_object(
+        return minio_client.presigned_get_object(
             bucket_name=MINIO_BUCKET,
             object_name=path,
             expires=timedelta(seconds=MEDIA_URL_TTL_SECONDS),
         )
-
-        # Si no hay endpoint público configurado, regresamos tal cual
-        if not PUBLIC_MINIO_ENDPOINT:
-            return internal_url
-
-        internal = urlparse(internal_url)
-        public = urlparse(PUBLIC_MINIO_ENDPOINT)
-
-        # Si solo pusiste host sin esquema, caemos al de internal
-        scheme = public.scheme or internal.scheme
-        netloc = public.netloc or public.path or internal.netloc
-
-        external = internal._replace(scheme=scheme, netloc=netloc)
-        return urlunparse(external)
-
     except S3Error as e:
         raise HTTPException(status_code=500, detail="Failed to generate signed URL") from e
-
 
 # ================== Endpoints ==================
 @app.post(
