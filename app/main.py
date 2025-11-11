@@ -3,7 +3,7 @@ import uuid
 import os
 from datetime import timedelta
 from typing import Optional, Tuple, Dict
-from urllib.parse import urlparse, urlunparse  # 👈 IMPORTANTE
+from urllib.parse import urlparse, urlunparse
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Header, Depends, Query
 from pydantic import BaseModel
@@ -26,9 +26,8 @@ MINIO_BUCKET = os.getenv("MINIO_BUCKET", "media")
 if not MINIO_ENDPOINT or not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
     raise RuntimeError("MinIO configuration is incomplete. Check MINIO_* env vars.")
 
-# Host público para exponer las URLs firmadas (externo al Docker network)
-# Usa PUBLIC_MINIO_ENDPOINT si existe, si no, ORIGIN_BASE_URL como fallback
-PUBLIC_MINIO_ENDPOINT = os.getenv("PUBLIC_MINIO_ENDPOINT") or os.getenv("ORIGIN_BASE_URL")
+# Host público (externo)
+PUBLIC_MINIO_ENDPOINT = os.getenv("PUBLIC_MINIO_ENDPOINT") or f"http://{MINIO_ENDPOINT}"
 
 # ===== Redis =====
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
@@ -65,7 +64,7 @@ if RAW_API_KEYS:
 if not API_KEYS_MAP:
     print("WARNING: No API keys configured. Set API_KEYS in .env for production.")
 
-# ===== Signed URL TTL (en segundos) =====
+# ===== Signed URL TTL =====
 MEDIA_URL_TTL_SECONDS = int(os.getenv("MEDIA_URL_TTL_SECONDS", "300"))
 
 # ================== MinIO Client ==================
@@ -76,7 +75,7 @@ minio_client = Minio(
     secure=MINIO_USE_SSL,
 )
 
-# Crea el bucket si no existe
+# Crear bucket si no existe
 if not minio_client.bucket_exists(MINIO_BUCKET):
     minio_client.make_bucket(MINIO_BUCKET)
 
@@ -85,11 +84,11 @@ app = FastAPI(
     title="Media Storage Service",
     description=(
         "Microservicio para gestionar media comprimida con MinIO.\n"
-        "- Protegido por API Key por proyecto (X-Api-Key).\n"
-        "- Cada request debe incluir X-User-Id (usuario autenticado por el sistema origen).\n"
-        "- Genera URLs firmadas temporales usando MinIO (bucket privado)."
+        "- Protegido por API Key (X-Api-Key).\n"
+        "- Cada request debe incluir X-User-Id.\n"
+        "- Genera URLs firmadas accesibles públicamente."
     ),
-    version="2.0.0",
+    version="2.1.0",
 )
 
 # ================== Models ==================
@@ -97,7 +96,7 @@ class MediaItem(BaseModel):
     id: str
     filename: str
     content_type: str
-    path: str        # Internal path (object_name en MinIO)
+    path: str
     user_id: str
     client_id: str
     folder: str
@@ -144,6 +143,7 @@ def sanitize_folder(folder: str) -> str:
     if ".." in folder:
         raise HTTPException(status_code=400, detail="Invalid folder name")
     allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_/"
+
     if any(ch not in allowed for ch in folder):
         raise HTTPException(status_code=400, detail="Invalid characters in folder")
     return folder
@@ -201,20 +201,21 @@ def upload_to_minio(path: str, data: bytes, content_type: str):
             content_type=content_type,
         )
     except S3Error as e:
-        raise HTTPException(status_code=500, detail="Upload to MinIO failed") from e
+        raise HTTPException(status_code=500, detail=f"Upload to MinIO failed: {str(e)}") from e
 
 
 def delete_from_minio(path: str):
     try:
         minio_client.remove_object(MINIO_BUCKET, path)
     except S3Error as e:
-        raise HTTPException(status_code=500, detail="Delete from MinIO failed") from e
+        raise HTTPException(status_code=500, detail=f"Delete from MinIO failed: {str(e)}") from e
 
 
-# ================== Signed URL (MinIO nativo + host público) ==================
+# ================== Signed URL ==================
 def generate_signed_url(path: str) -> str:
     """
-    Genera una URL firmada usando MinIO para un objeto en el bucket privado.
+    Genera una URL firmada usando MinIO con el host público real,
+    evitando reemplazos que rompan la firma.
     """
     try:
         return minio_client.presigned_get_object(
@@ -223,14 +224,11 @@ def generate_signed_url(path: str) -> str:
             expires=timedelta(seconds=MEDIA_URL_TTL_SECONDS),
         )
     except S3Error as e:
-        raise HTTPException(status_code=500, detail="Failed to generate signed URL") from e
+        raise HTTPException(status_code=500, detail=f"Failed to generate signed URL: {str(e)}") from e
+
 
 # ================== Endpoints ==================
-@app.post(
-    "/media",
-    response_model=MediaItem,
-    summary="Upload media (returns internal path only)",
-)
+@app.post("/media", response_model=MediaItem, summary="Upload media (returns internal path)")
 async def upload_media(
     file: UploadFile = File(...),
     client_id: str = Depends(get_client_id),
@@ -259,10 +257,7 @@ async def upload_media(
     return item
 
 
-@app.get(
-    "/media/url",
-    summary="Generate MinIO presigned URL for a given path (secured by API Key + User)",
-)
+@app.get("/media/url", summary="Genera URL firmada accesible públicamente")
 async def generate_media_url(
     path: str = Query(...),
     client_id: str = Depends(get_client_id),
@@ -275,5 +270,5 @@ async def generate_media_url(
     if item.client_id != client_id or item.user_id != user_id:
         raise HTTPException(status_code=403, detail="Unauthorized for this path")
 
-    url = generate_signed_url(path)
-    return {"url": url, "expires_in": MEDIA_URL_TTL_SECONDS}
+    signed_url = generate_signed_url(path)
+    return {"url": signed_url, "expires_in": MEDIA_URL_TTL_SECONDS}
