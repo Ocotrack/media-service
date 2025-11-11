@@ -30,7 +30,7 @@ services:
       - minio
       - redis
     environment:
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ENDPOINT: casamagoswiss.ddns.net:9003
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       MINIO_USE_SSL: ${MINIO_USE_SSL}
@@ -46,9 +46,17 @@ services:
       API_KEYS: ${API_KEYS}
       PORT: ${PORT}
       ENV: ${ENV}
+
+      PUBLIC_MINIO_ENDPOINT: http://casamagoswiss.ddns.net:9003
+
     ports:
       - "8002:8002"
+
+    extra_hosts:
+      - "casamagoswiss.ddns.net:192.168.1.126"
+
     restart: unless-stopped
+
 
 volumes:
   minio_data:
