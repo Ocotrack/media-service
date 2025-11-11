@@ -9,8 +9,8 @@ services:
     volumes:
       - minio_data:/data
     ports:
-      - "9003:9003"   # API MinIO accesible en host
-      - "9004:9004"   # Consola MinIO accesible en host
+      - "9003:9003"   # API MinIO accesible desde el host (para las URLs firmadas)
+      - "9004:9004"   # Consola MinIO
     restart: unless-stopped
 
   redis:
@@ -30,30 +30,34 @@ services:
       - minio
       - redis
     environment:
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      # MinIO interno (dentro de la red de Docker)
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}          # minio:9003
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       MINIO_USE_SSL: ${MINIO_USE_SSL}
       MINIO_BUCKET: ${MINIO_BUCKET}
 
-      ORIGIN_BASE_URL: ${ORIGIN_BASE_URL}
+      # Host público que verán tus clientes (se usa para reescribir la URL firmada)
+      PUBLIC_MINIO_ENDPOINT: ${PUBLIC_MINIO_ENDPOINT}
 
-      MEDIA_URL_SIGNING_SECRET: ${MEDIA_URL_SIGNING_SECRET}
+      # TTL de las URLs firmadas
       MEDIA_URL_TTL_SECONDS: ${MEDIA_URL_TTL_SECONDS}
 
-      API_KEYS: ${API_KEYS}
-
+      # Redis
       REDIS_HOST: ${REDIS_HOST}
       REDIS_PORT: ${REDIS_PORT}
       REDIS_DB: ${REDIS_DB}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
 
+      # API Keys
+      API_KEYS: ${API_KEYS}
+
+      # FastAPI
       PORT: ${PORT}
       ENV: ${ENV}
     ports:
       - "8002:8002"
     restart: unless-stopped
-
 
 volumes:
   minio_data:
