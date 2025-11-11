@@ -3,6 +3,7 @@ import uuid
 import os
 from datetime import timedelta
 from typing import Optional, Tuple, Dict
+from urllib.parse import urlparse, urlunparse  # 👈 IMPORTANTE
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Header, Depends, Query
 from pydantic import BaseModel
@@ -24,6 +25,10 @@ MINIO_BUCKET = os.getenv("MINIO_BUCKET", "media")
 
 if not MINIO_ENDPOINT or not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
     raise RuntimeError("MinIO configuration is incomplete. Check MINIO_* env vars.")
+
+# Host público para exponer las URLs firmadas (externo al Docker network)
+# Usa PUBLIC_MINIO_ENDPOINT si existe, si no, ORIGIN_BASE_URL como fallback
+PUBLIC_MINIO_ENDPOINT = os.getenv("PUBLIC_MINIO_ENDPOINT") or os.getenv("ORIGIN_BASE_URL")
 
 # ===== Redis =====
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
@@ -206,18 +211,34 @@ def delete_from_minio(path: str):
         raise HTTPException(status_code=500, detail="Delete from MinIO failed") from e
 
 
-# ================== Signed URL (MinIO nativo) ==================
+# ================== Signed URL (MinIO nativo + host público) ==================
 def generate_signed_url(path: str) -> str:
     """
     Genera una URL firmada usando MinIO para un objeto en el bucket privado.
+    Si PUBLIC_MINIO_ENDPOINT / ORIGIN_BASE_URL está configurado, reemplaza
+    el host interno (minio:9003) por el host público (ej. casamagoswiss.ddns.net:9003).
     """
     try:
-        url = minio_client.presigned_get_object(
+        internal_url = minio_client.presigned_get_object(
             bucket_name=MINIO_BUCKET,
             object_name=path,
             expires=timedelta(seconds=MEDIA_URL_TTL_SECONDS),
         )
-        return url
+
+        # Si no hay endpoint público configurado, regresamos tal cual
+        if not PUBLIC_MINIO_ENDPOINT:
+            return internal_url
+
+        internal = urlparse(internal_url)
+        public = urlparse(PUBLIC_MINIO_ENDPOINT)
+
+        # Si solo pusiste host sin esquema, caemos al de internal
+        scheme = public.scheme or internal.scheme
+        netloc = public.netloc or public.path or internal.netloc
+
+        external = internal._replace(scheme=scheme, netloc=netloc)
+        return urlunparse(external)
+
     except S3Error as e:
         raise HTTPException(status_code=500, detail="Failed to generate signed URL") from e
 
@@ -265,15 +286,12 @@ async def generate_media_url(
     client_id: str = Depends(get_client_id),
     user_id: str = Depends(get_current_user),
 ):
-    # Verificar que el media exista en Redis (metadatos)
     item = get_media_by_path(path)
     if not item:
         raise HTTPException(status_code=404, detail="Media not found")
 
-    # Verificar que pertenezca a ese cliente y usuario
     if item.client_id != client_id or item.user_id != user_id:
         raise HTTPException(status_code=403, detail="Unauthorized for this path")
 
-    # Generar URL firmada usando MinIO
     url = generate_signed_url(path)
     return {"url": url, "expires_in": MEDIA_URL_TTL_SECONDS}
