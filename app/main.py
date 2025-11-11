@@ -27,7 +27,7 @@ if not MINIO_ENDPOINT or not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
     raise RuntimeError("MinIO configuration is incomplete. Check MINIO_* env vars.")
 
 # Host público (externo)
-PUBLIC_MINIO_ENDPOINT = os.getenv("PUBLIC_MINIO_ENDPOINT") or f"http://{MINIO_ENDPOINT}"
+PUBLIC_MINIO_ENDPOINT = os.getenv("PUBLIC_MINIO_ENDPOINT")
 
 # ===== Redis =====
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
