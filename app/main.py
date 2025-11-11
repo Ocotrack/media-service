@@ -64,7 +64,7 @@ if not API_KEYS_MAP:
 # ----- CDN / Signed URLs -----
 # Debe apuntar a tu origen público o CDN, por ejemplo:
 # CDN_BASE_URL=https://cdn.meximova.com/media
-CDN_BASE_URL = os.getenv("ORIGIN_BASE_URL", "").rstrip("/")
+CDN_BASE_URL = os.getenv("ORIGIN_BASE_URL", "https://cdn.meximova.com/media").rstrip("/")
 MEDIA_URL_SIGNING_SECRET = os.getenv("MEDIA_URL_SIGNING_SECRET")
 MEDIA_URL_TTL_SECONDS = int(os.getenv("MEDIA_URL_TTL_SECONDS", "300"))
 
