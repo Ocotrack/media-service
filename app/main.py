@@ -3,9 +3,9 @@ import uuid
 import os
 from datetime import timedelta
 from typing import Optional, Tuple, Dict
-from urllib.parse import urlparse, urlunparse
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Header, Depends, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from minio import Minio
 from minio.error import S3Error
@@ -13,7 +13,6 @@ from PIL import Image
 from dotenv import load_dotenv
 from redis import Redis
 
-# ================== Load environment ==================
 load_dotenv()
 
 # ===== MinIO =====
@@ -24,12 +23,10 @@ MINIO_USE_SSL = os.getenv("MINIO_USE_SSL", "false").lower() == "true"
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "media")
 
 if not MINIO_ENDPOINT or not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
-    raise RuntimeError("MinIO configuration is incomplete. Check MINIO_* env vars.")
+    raise RuntimeError("MinIO configuration is incomplete. Check MINIO_* environment variables.")
 
-# Host público (externo)
 PUBLIC_MINIO_ENDPOINT = os.getenv("PUBLIC_MINIO_ENDPOINT")
 
-# ===== Redis =====
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
@@ -43,7 +40,6 @@ redis_client = Redis(
     decode_responses=True,
 )
 
-# ===== API Keys =====
 RAW_API_KEYS = os.getenv("API_KEYS", "")
 API_KEYS_MAP: Dict[str, str] = {}
 
@@ -64,10 +60,8 @@ if RAW_API_KEYS:
 if not API_KEYS_MAP:
     print("WARNING: No API keys configured. Set API_KEYS in .env for production.")
 
-# ===== Signed URL TTL =====
 MEDIA_URL_TTL_SECONDS = int(os.getenv("MEDIA_URL_TTL_SECONDS", "300"))
 
-# ================== MinIO Client ==================
 minio_client = Minio(
     MINIO_ENDPOINT,
     access_key=MINIO_ACCESS_KEY,
@@ -75,7 +69,6 @@ minio_client = Minio(
     secure=MINIO_USE_SSL,
 )
 
-# Crear bucket si no existe
 if not minio_client.bucket_exists(MINIO_BUCKET):
     minio_client.make_bucket(MINIO_BUCKET)
 
@@ -83,12 +76,13 @@ if not minio_client.bucket_exists(MINIO_BUCKET):
 app = FastAPI(
     title="Media Storage Service",
     description=(
-        "Microservicio para gestionar media comprimida con MinIO.\n"
-        "- Protegido por API Key (X-Api-Key).\n"
-        "- Cada request debe incluir X-User-Id.\n"
-        "- Genera URLs firmadas accesibles públicamente."
+        "Microservice to handle compressed media.\n"
+        "- Protected via API Key (X-Api-Key).\n"
+        "- Each request must include X-User-Id.\n"
+        "- Generates signed, publicly accessible URLs.\n"
+        "- Includes endpoints to upload, update, delete, and download media."
     ),
-    version="2.1.0",
+    version="1.1.0",
 )
 
 # ================== Models ==================
@@ -102,7 +96,6 @@ class MediaItem(BaseModel):
     folder: str
 
 
-# ================== Redis Helpers ==================
 def redis_key(media_id: str) -> str:
     return f"media:{media_id}"
 
@@ -135,7 +128,6 @@ def delete_media_item(item: MediaItem) -> None:
     redis_client.delete(media_path_key(item.path))
 
 
-# ================== Helpers ==================
 def sanitize_folder(folder: str) -> str:
     folder = folder.strip().strip("/")
     if not folder:
@@ -143,7 +135,6 @@ def sanitize_folder(folder: str) -> str:
     if ".." in folder:
         raise HTTPException(status_code=400, detail="Invalid folder name")
     allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_/"
-
     if any(ch not in allowed for ch in folder):
         raise HTTPException(status_code=400, detail="Invalid characters in folder")
     return folder
@@ -176,8 +167,8 @@ async def get_current_user(x_user_id: Optional[str] = Header(None, alias="X-User
     return x_user_id
 
 
-# ================== MinIO / Compression ==================
 async def compress_image(file: UploadFile) -> Tuple[bytes, str]:
+    """Compress uploaded image to WEBP format."""
     try:
         raw = await file.read()
         image = Image.open(io.BytesIO(raw))
@@ -192,6 +183,7 @@ async def compress_image(file: UploadFile) -> Tuple[bytes, str]:
 
 
 def upload_to_minio(path: str, data: bytes, content_type: str):
+    """Upload object to MinIO."""
     try:
         minio_client.put_object(
             bucket_name=MINIO_BUCKET,
@@ -205,17 +197,17 @@ def upload_to_minio(path: str, data: bytes, content_type: str):
 
 
 def delete_from_minio(path: str):
+    """Delete object from MinIO."""
     try:
         minio_client.remove_object(MINIO_BUCKET, path)
     except S3Error as e:
         raise HTTPException(status_code=500, detail=f"Delete from MinIO failed: {str(e)}") from e
 
 
-# ================== Signed URL ==================
 def generate_signed_url(path: str) -> str:
     """
-    Genera una URL firmada usando MinIO con el host público real,
-    evitando reemplazos que rompan la firma.
+    Generate a signed MinIO URL.
+    The signature is based on MINIO_ENDPOINT (must be the correct public host).
     """
     try:
         return minio_client.presigned_get_object(
@@ -228,6 +220,8 @@ def generate_signed_url(path: str) -> str:
 
 
 # ================== Endpoints ==================
+
+#  Create media 
 @app.post("/media", response_model=MediaItem, summary="Upload media (returns internal path)")
 async def upload_media(
     file: UploadFile = File(...),
@@ -235,6 +229,7 @@ async def upload_media(
     user_id: str = Depends(get_current_user),
     folder: str = Depends(get_folder),
 ):
+    """Upload and compress an image"""
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Only image files allowed")
 
@@ -257,12 +252,14 @@ async def upload_media(
     return item
 
 
-@app.get("/media/url", summary="Genera URL firmada accesible públicamente")
+#  Get signed URL 
+@app.get("/media/url", summary="Generate signed URL for media access")
 async def generate_media_url(
     path: str = Query(...),
     client_id: str = Depends(get_client_id),
     user_id: str = Depends(get_current_user),
 ):
+    """Generate a signed URL to access a private object in MinIO."""
     item = get_media_by_path(path)
     if not item:
         raise HTTPException(status_code=404, detail="Media not found")
@@ -272,3 +269,83 @@ async def generate_media_url(
 
     signed_url = generate_signed_url(path)
     return {"url": signed_url, "expires_in": MEDIA_URL_TTL_SECONDS}
+
+
+# ---- Update media ----
+@app.put("/media", response_model=MediaItem, summary="Update existing media by path")
+async def update_media(
+    path: str = Query(..., description="Internal path returned when uploading (MediaItem.path)"),
+    file: UploadFile = File(...),
+    client_id: str = Depends(get_client_id),
+    user_id: str = Depends(get_current_user),
+):
+    """Replace an existing image in MinIO, preserving the same internal path."""
+    item = get_media_by_path(path)
+    if not item:
+        raise HTTPException(status_code=404, detail="Media not found")
+
+    if item.client_id != client_id or item.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Unauthorized for this path")
+
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Only image files allowed")
+
+    compressed, new_type = await compress_image(file)
+
+    upload_to_minio(path, compressed, new_type)
+
+    item.filename = file.filename
+    item.content_type = new_type
+    save_media(item)
+
+    return item
+
+
+#  Delete media 
+@app.delete("/media", summary="Delete media by path")
+async def delete_media(
+    path: str = Query(..., description="Internal path returned when uploading (MediaItem.path)"),
+    client_id: str = Depends(get_client_id),
+    user_id: str = Depends(get_current_user),
+):
+    """Delete a media file from MinIO and remove its metadata from Redis."""
+    item = get_media_by_path(path)
+    if not item:
+        raise HTTPException(status_code=404, detail="Media not found")
+
+    if item.client_id != client_id or item.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Unauthorized for this path")
+
+    delete_from_minio(path)
+    delete_media_item(item)
+
+    return {"detail": "Media deleted successfully"}
+
+
+#  Download media 
+@app.get("/media/download", summary="Download media content (stream)")
+async def download_media(
+    path: str = Query(..., description="Internal path returned when uploading (MediaItem.path)"),
+    client_id: str = Depends(get_client_id),
+    user_id: str = Depends(get_current_user),
+):
+    """Download a media file directly as a streaming response."""
+    item = get_media_by_path(path)
+    if not item:
+        raise HTTPException(status_code=404, detail="Media not found")
+
+    if item.client_id != client_id or item.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Unauthorized for this path")
+
+    try:
+        obj = minio_client.get_object(MINIO_BUCKET, path)
+    except S3Error:
+        raise HTTPException(status_code=404, detail="Media not found in storage")
+
+    return StreamingResponse(
+        obj,
+        media_type=item.content_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'inline; filename="{item.filename}"'
+        },
+    )
