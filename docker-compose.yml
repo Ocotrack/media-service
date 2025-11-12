@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
   minio:
     image: minio/minio:latest
@@ -5,12 +7,13 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+      MINIO_BROWSER_REDIRECT_URL: http://files.meximova.com
     command: server /data --address ":9003" --console-address ":9004"
     volumes:
       - minio_data:/data
     ports:
-      - "9003:9003"
-      - "9004:9004"
+      - "9003:9003"   # API S3
+      - "9004:9004"   # Consola MinIO
     restart: unless-stopped
 
   redis:
@@ -30,33 +33,27 @@ services:
       - minio
       - redis
     environment:
-      MINIO_ENDPOINT_INTERNAL: ${MINIO_ENDPOINT_INTERNAL}
+      MINIO_ENDPOINT_INTERNAL: ${MINIO_ENDPOINT_INTERNAL}  
       MINIO_ENDPOINT_PUBLIC: ${MINIO_ENDPOINT_PUBLIC}
       MINIO_REGION: ${MINIO_REGION}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       MINIO_USE_SSL: ${MINIO_USE_SSL}
       MINIO_BUCKET: ${MINIO_BUCKET}
-
       MEDIA_URL_TTL_SECONDS: ${MEDIA_URL_TTL_SECONDS}
-
       REDIS_HOST: ${REDIS_HOST}
       REDIS_PORT: ${REDIS_PORT}
       REDIS_DB: ${REDIS_DB}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
-
       API_KEYS: ${API_KEYS}
       PORT: ${PORT}
       ENV: ${ENV}
-
     ports:
       - "8002:8002"
-
     extra_hosts:
       - "cdn.meximova.com:192.168.1.126"
-
+      - "files.meximova.com:192.168.1.126"
     restart: unless-stopped
-
 
 volumes:
   minio_data:
