@@ -7,7 +7,7 @@ class MediaItem(BaseModel):
     filename: str
     content_type: str
     path: str
-    user_id: str
+    user_id: Optional[str] = None
     client_id: str
     folder: str
     status: str = "ready"

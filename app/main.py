@@ -59,15 +59,17 @@ async def get_client_id(x_api_key: Optional[str] = Header(None, alias="X-Api-Key
         raise HTTPException(status_code=403, detail="Invalid or unauthorized API Key")
     return client_id
 
-async def get_current_user(x_user_id: Optional[str] = Header(None, alias="X-User-Id")) -> str:
-    if not x_user_id:
-        raise HTTPException(status_code=401, detail="X-User-Id required")
+async def get_current_user(x_user_id: Optional[str] = Header(None, alias="X-User-Id")) -> Optional[str]:
     return x_user_id
 
-def build_base_path(client_id: str, folder: str, user_id: str, media_id: str) -> str:
+def build_base_path(client_id: str, folder: str, user_id: Optional[str], media_id: str) -> str:
+    parts = [client_id]
     if folder:
-        return f"{client_id}/{folder}/{user_id}/{media_id}"
-    return f"{client_id}/{user_id}/{media_id}"
+        parts.append(folder)
+    if user_id:
+        parts.append(user_id)
+    parts.append(media_id)
+    return "/".join(parts)
 
 # ========== Endpoints ==========
 
@@ -75,7 +77,7 @@ def build_base_path(client_id: str, folder: str, user_id: str, media_id: str) ->
 async def upload_media(
     file: UploadFile = File(...),
     client_id: str = Depends(get_client_id),
-    user_id: str = Depends(get_current_user),
+    user_id: Optional[str] = Depends(get_current_user),
     folder: str = Depends(get_folder),
 ):
     """
@@ -175,7 +177,7 @@ async def upload_media(
 async def generate_media_url(
     path: str = Query(...),
     client_id: str = Depends(get_client_id),
-    user_id: str = Depends(get_current_user),
+    user_id: Optional[str] = Depends(get_current_user),
 ):
     """
     Return signed URL only if media is ready.
@@ -200,7 +202,7 @@ async def update_media(
     path: str = Query(..., description="Internal path previously returned (MediaItem.path)"),
     file: UploadFile = File(...),
     client_id: str = Depends(get_client_id),
-    user_id: str = Depends(get_current_user),
+    user_id: Optional[str] = Depends(get_current_user),
 ):
     """
     Replace existing media (image/video). Uses same async/sync strategy as upload.
@@ -285,7 +287,7 @@ async def update_media(
 async def delete_media(
     path: str = Query(..., description="Internal path previously returned (MediaItem.path)"),
     client_id: str = Depends(get_client_id),
-    user_id: str = Depends(get_current_user),
+    user_id: Optional[str] = Depends(get_current_user),
 ):
     """Delete media object and its metadata."""
     item = get_media_by_path(path)
@@ -308,7 +310,7 @@ async def delete_media(
 async def download_media(
     path: str = Query(..., description="Internal path previously returned (MediaItem.path)"),
     client_id: str = Depends(get_client_id),
-    user_id: str = Depends(get_current_user),
+    user_id: Optional[str] = Depends(get_current_user),
 ):
     """Stream media if it's ready."""
     item = get_media_by_path(path)
