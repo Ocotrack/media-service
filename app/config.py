@@ -6,19 +6,6 @@ from dotenv import load_dotenv
 from redis import Redis
 from minio import Minio
 from minio.error import S3Error
-
-load_dotenv()
-
-logger = logging.getLogger(__name__)
-
-# --- Configuración desde entorno ---
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9003")
-MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
-MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
-MINIO_BUCKET = os.getenv("MINIO_BUCKET", "my-bucket")
-MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() in ("1", "true", "yes")
-
-# --- Validaciones básicas (sin llamadas de red) ---
 if not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
     logger.warning("MINIO_ACCESS_KEY o MINIO_SECRET_KEY no están definidos. "
                    "Si vas a usar MinIO, configúralos en el entorno.")
