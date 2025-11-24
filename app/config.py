@@ -1,4 +1,3 @@
-# app/config.py
 import os
 import logging
 from datetime import timedelta
@@ -17,7 +16,8 @@ MINIO_ENDPOINT_PUBLIC = os.getenv("MINIO_ENDPOINT_PUBLIC", MINIO_ENDPOINT)
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "my-bucket")
-MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() in ("1", "true", "yes")
+
+# Unifica la semántica: usa MINIO_USE_SSL en .env (true/false)
 MINIO_USE_SSL = os.getenv("MINIO_USE_SSL", "false").lower() in ("1", "true", "yes")
 
 # --- Validaciones básicas (sin llamadas de red) ---
@@ -25,15 +25,23 @@ if not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
     logger.warning("MINIO_ACCESS_KEY o MINIO_SECRET_KEY no están definidos. "
                    "Si vas a usar MinIO, configúralos en el entorno.")
 
+# ---------------- Signed URL TTL ----------------
+# Asegúrate de definir MEDIA_URL_TTL_SECONDS en .env
+MEDIA_URL_TTL_SECONDS = int(os.getenv("MEDIA_URL_TTL_SECONDS", "300"))
+# Exponer como entero (segundos) es más robusto para versiones de minio-py
+MEDIA_URL_EXPIRES = MEDIA_URL_TTL_SECONDS
+
 # --- Cliente MinIO para operaciones internas ---
+# El cliente no abre conexión al crearse, por lo que es seguro instanciar aquí.
 minio_internal = Minio(
     endpoint=MINIO_ENDPOINT,
     access_key=MINIO_ACCESS_KEY,
     secret_key=MINIO_SECRET_KEY,
-    secure=MINIO_SECURE
+    secure=MINIO_USE_SSL
 )
 
 # --- Cliente MinIO para generar URLs públicas ---
+# Este cliente usa el endpoint público (p. ej. cdn.meximova.com[:port])
 minio_signer = Minio(
     endpoint=MINIO_ENDPOINT_PUBLIC,
     access_key=MINIO_ACCESS_KEY,
@@ -75,10 +83,6 @@ if RAW_API_KEYS:
 
 if not API_KEYS_MAP:
     logger.warning("No API keys configured. Set API_KEYS in .env for production.")
-
-# ================== Signed URL TTL ==================
-MEDIA_URL_TTL_SECONDS = int(os.getenv("MEDIA_URL_TTL_SECONDS", "300"))
-MEDIA_URL_EXPIRES = timedelta(seconds=MEDIA_URL_TTL_SECONDS)
 
 # ================== Job Queue ==================
 MEDIA_JOBS_QUEUE_KEY = "media:jobs"
