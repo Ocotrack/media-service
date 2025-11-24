@@ -13,19 +13,17 @@ logger = logging.getLogger(__name__)
 
 # --- Configuración desde entorno ---
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9003")
-MINIO_ENDPOINT_PUBLIC = os.getenv("MINIO_ENDPOINT_PUBLIC", MINIO_ENDPOINT)
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "my-bucket")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() in ("1", "true", "yes")
-MINIO_USE_SSL = os.getenv("MINIO_USE_SSL", "false").lower() in ("1", "true", "yes")
 
 # --- Validaciones básicas (sin llamadas de red) ---
 if not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
     logger.warning("MINIO_ACCESS_KEY o MINIO_SECRET_KEY no están definidos. "
                    "Si vas a usar MinIO, configúralos en el entorno.")
 
-# --- Cliente MinIO para operaciones internas ---
+# --- Cliente MinIO (no ejecutar operaciones aquí) ---
 minio_internal = Minio(
     endpoint=MINIO_ENDPOINT,
     access_key=MINIO_ACCESS_KEY,
@@ -33,13 +31,8 @@ minio_internal = Minio(
     secure=MINIO_SECURE
 )
 
-# --- Cliente MinIO para generar URLs públicas ---
-minio_signer = Minio(
-    endpoint=MINIO_ENDPOINT_PUBLIC,
-    access_key=MINIO_ACCESS_KEY,
-    secret_key=MINIO_SECRET_KEY,
-    secure=MINIO_USE_SSL
-)
+# Signer client: para URLs pre-firmadas (mismo que internal en esta configuración)
+minio_signer = minio_internal
 
 
 # ================== Redis ==================
