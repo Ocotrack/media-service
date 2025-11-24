@@ -1,42 +1,39 @@
+# app/config.py
 import os
+import logging
 from datetime import timedelta
 from dotenv import load_dotenv
 from redis import Redis
 from minio import Minio
+from minio.error import S3Error
 
 load_dotenv()
 
-# ================== MinIO base creds ==================
+logger = logging.getLogger(__name__)
+
+# --- Configuración desde entorno ---
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
-MINIO_USE_SSL = os.getenv("MINIO_USE_SSL", "false").lower() == "true"
-MINIO_BUCKET = os.getenv("MINIO_BUCKET", "media")
+MINIO_BUCKET = os.getenv("MINIO_BUCKET", "my-bucket")
+MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() in ("1", "true", "yes")
 
+# --- Validaciones básicas (sin llamadas de red) ---
 if not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
-    raise RuntimeError("MinIO credentials are missing: set MINIO_ACCESS_KEY and MINIO_SECRET_KEY.")
+    logger.warning("MINIO_ACCESS_KEY o MINIO_SECRET_KEY no están definidos. "
+                   "Si vas a usar MinIO, configúralos en el entorno.")
 
-# Fix region to avoid SDK calling '/?location'
-MINIO_REGION = os.getenv("MINIO_REGION", "us-east-1")
+# --- Cliente MinIO (no ejecutar operaciones aquí) ---
+minio_internal = Minio(
+    endpoint=MINIO_ENDPOINT,
+    access_key=MINIO_ACCESS_KEY,
+    secret_key=MINIO_SECRET_KEY,
+    secure=MINIO_SECURE
+)
 
-# ---- Endpoints (new style preferred) ----
-# Internal endpoint: used for actual I/O from containers (e.g., 'minio:9003')
-MINIO_ENDPOINT_INTERNAL = os.getenv("MINIO_ENDPOINT_INTERNAL")
-# Public endpoint: used only to sign URLs (e.g., 'casamagoswiss.ddns.net:9003')
-MINIO_ENDPOINT_PUBLIC = os.getenv("MINIO_ENDPOINT_PUBLIC")
+# Signer client: para URLs pre-firmadas (mismo que internal en esta configuración)
+minio_signer = minio_internal
 
-# ---- Legacy fallback (single endpoint) ----
-LEGACY_MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT")
-
-# Resolve endpoints
-if not MINIO_ENDPOINT_INTERNAL:
-    if LEGACY_MINIO_ENDPOINT:
-        MINIO_ENDPOINT_INTERNAL = LEGACY_MINIO_ENDPOINT
-    else:
-        MINIO_ENDPOINT_INTERNAL = "minio:9003"  # safe default inside docker network
-
-if not MINIO_ENDPOINT_PUBLIC:
-    # If not provided, fall back to whatever we have internally (works on LAN)
-    MINIO_ENDPOINT_PUBLIC = MINIO_ENDPOINT_INTERNAL
 
 # ================== Redis ==================
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
@@ -70,7 +67,7 @@ if RAW_API_KEYS:
             continue
 
 if not API_KEYS_MAP:
-    print("WARNING: No API keys configured. Set API_KEYS in .env for production.")
+    logger.warning("No API keys configured. Set API_KEYS in .env for production.")
 
 # ================== Signed URL TTL ==================
 MEDIA_URL_TTL_SECONDS = int(os.getenv("MEDIA_URL_TTL_SECONDS", "300"))
@@ -79,25 +76,70 @@ MEDIA_URL_EXPIRES = timedelta(seconds=MEDIA_URL_TTL_SECONDS)
 # ================== Job Queue ==================
 MEDIA_JOBS_QUEUE_KEY = "media:jobs"
 
-# ================== MinIO clients ==================
-# Internal client: real I/O within Docker network
-minio_internal = Minio(
-    MINIO_ENDPOINT_INTERNAL,
-    access_key=MINIO_ACCESS_KEY,
-    secret_key=MINIO_SECRET_KEY,
-    secure=MINIO_USE_SSL,
-    region=MINIO_REGION,
-)
 
-# Signer client: ONLY for presigned URLs (public host); fixed region prevents calls to '/?location'
-minio_signer = Minio(
-    MINIO_ENDPOINT_PUBLIC,
-    access_key=MINIO_ACCESS_KEY,
-    secret_key=MINIO_SECRET_KEY,
-    secure=MINIO_USE_SSL,
-    region=MINIO_REGION,
-)
+# --- utilidades ---
+def _try_bucket_exists_positional(client, bucket_name):
+    """Intento directo con la firma posicional."""
+    return client.bucket_exists(bucket_name)
 
-# Ensure bucket exists using internal client
-if not minio_internal.bucket_exists(MINIO_BUCKET):
-    minio_internal.make_bucket(MINIO_BUCKET)
+def _try_bucket_exists_kw(client, bucket_name):
+    """Intento con keyword (bucket_name=...), por si la firma difiere."""
+    return client.bucket_exists(bucket_name=bucket_name)
+
+def _try_list_buckets(client, bucket_name):
+    """Fallback: listar buckets y comparar por nombre (no ideal pero funciona)."""
+    buckets = client.list_buckets()
+    return any(b.name == bucket_name for b in buckets)
+
+def ensure_bucket_exists(client, bucket_name, create_if_missing=True):
+    """
+    Asegura que exista el bucket.
+    - NO debe llamarse durante la importación del módulo.
+    - Llamar desde el evento de startup o desde el entrypoint.
+    Devuelve True si existe o fue creado, False si no existe (y create_if_missing=False).
+    Lanza excepción si hay un error irreparable.
+    """
+    if not bucket_name:
+        raise ValueError("bucket_name vacío")
+
+    # Intentos ordenados con manejo de TypeError específico
+    try:
+        try:
+            exists = _try_bucket_exists_positional(client, bucket_name)
+            logger.debug("bucket_exists (positional) OK -> %s", exists)
+        except TypeError as te_pos:
+            # firma inesperada; intenta con keyword
+            logger.debug("bucket_exists posicional falló: %s", te_pos)
+            try:
+                exists = _try_bucket_exists_kw(client, bucket_name)
+                logger.debug("bucket_exists (keyword) OK -> %s", exists)
+            except TypeError as te_kw:
+                logger.debug("bucket_exists keyword falló: %s", te_kw)
+                # fallback a listar buckets
+                exists = _try_list_buckets(client, bucket_name)
+                logger.debug("list_buckets fallback -> %s", exists)
+    except S3Error as s3e:
+        # errores del cliente S3/MinIO (credenciales, conexión, etc.)
+        logger.exception("S3Error verificando bucket: %s", s3e)
+        raise
+    except Exception as e:
+        logger.exception("Error inesperado verificando bucket: %s", e)
+        raise
+
+    if exists:
+        return True
+
+    # Si no existe y está permitido, intentar crear el bucket
+    if not create_if_missing:
+        return False
+
+    try:
+        client.make_bucket(bucket_name)
+        logger.info("Bucket creado exitosamente: %s", bucket_name)
+        return True
+    except S3Error as s3e:
+        logger.exception("S3Error creando bucket '%s': %s", bucket_name, s3e)
+        raise
+    except Exception as e:
+        logger.exception("Error creando bucket '%s': %s", bucket_name, e)
+        raise

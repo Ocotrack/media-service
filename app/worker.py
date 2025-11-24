@@ -2,10 +2,10 @@ import io
 import os
 import tempfile
 
-from app.queue import dequeue_job
-from app.config import minio_internal, MINIO_BUCKET
-from app.models import get_media_item, save_media
-from app.compression import compress_image_aggressive, compress_video_ffmpeg
+from .queue import dequeue_job
+from .config import minio_internal, MINIO_BUCKET
+from .models import get_media_item, save_media
+from .compression import compress_image_aggressive, compress_video_ffmpeg
 
 
 def process_image_job(job):
