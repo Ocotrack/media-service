@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   minio:
     image: minio/minio:latest
@@ -12,14 +10,14 @@ services:
     volumes:
       - minio_data:/data
     ports:
-      - "9003:9003"   # API S3
-      - "9004:9004"   # Consola MinIO
+      - "9003:9003" # API S3
+      - "9004:9004" # Consola MinIO
     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     container_name: redis
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    command: [ "redis-server", "--requirepass", "${REDIS_PASSWORD}" ]
     ports:
       - "6379:6379"
     restart: unless-stopped
@@ -33,7 +31,7 @@ services:
       - minio
       - redis
     environment:
-      MINIO_ENDPOINT_INTERNAL: ${MINIO_ENDPOINT_INTERNAL}  
+      MINIO_ENDPOINT_INTERNAL: ${MINIO_ENDPOINT_INTERNAL}
       MINIO_ENDPOINT_PUBLIC: ${MINIO_ENDPOINT_PUBLIC}
       MINIO_REGION: ${MINIO_REGION}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
