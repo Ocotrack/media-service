@@ -29,7 +29,9 @@ def generate_signed_url(path: str) -> str:
             expires=MEDIA_URL_EXPIRES,
         )
     except S3Error as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate signed URL: {str(e)}") from e
+        raise HTTPException(status_code=500, detail=f"Failed to generate signed URL (S3Error): {str(e)}") from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate signed URL: {type(e).__name__} - {str(e)}") from e
 
 def get_object_stream(path: str):
     try:
