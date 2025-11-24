@@ -28,7 +28,7 @@ app = FastAPI(
         "Module of Meximova Transportes for managing media files.\n"
         "- Allows uploading, updating, deleting, and downloading media.\n"
         "- Protected by project-based API Key.\n"
-        "- Each request may include a user identifier (X-User-Id)."
+        "- Each request requires a user identifier (X-User-Id)."
     ),
     version="1.0.0",
 )
