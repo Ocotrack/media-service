@@ -76,3 +76,4 @@ if not API_KEYS_MAP:
 # ================== Signed URL TTL ==================
 MEDIA_URL_TTL_SECONDS = int(os.getenv("MEDIA_URL_TTL_SECONDS", "300"))
 MEDIA_URL_EXPIRES = timedelta(seconds=MEDIA_URL_TTL_SECONDS)
+MEDIA_JOBS_QUEUE_KEY = "media:jobs"
