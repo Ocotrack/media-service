@@ -23,13 +23,16 @@ def delete_object(path: str):
 
 def generate_signed_url(path: str) -> str:
     try:
-        return minio_signer.presigned_get_object(
+        url = minio_signer.presigned_get_object(
             bucket_name=MINIO_BUCKET,
             object_name=path,
             expires=MEDIA_URL_EXPIRES,
         )
+        public_url = url.replace("http://minio:9003", "http://cdn.meximova.com")
+        return public_url
     except S3Error as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate signed URL: {str(e)}") from e
+
 
 def get_object_stream(path: str):
     try:
