@@ -12,7 +12,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # --- Configuración desde entorno ---
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9003")
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9003")  # MinIO interno
 MINIO_ENDPOINT_PUBLIC = os.getenv("MINIO_ENDPOINT_PUBLIC", MINIO_ENDPOINT)
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
@@ -22,8 +22,10 @@ MINIO_USE_SSL = os.getenv("MINIO_USE_SSL", "false").lower() in ("1", "true", "ye
 
 # --- Validaciones básicas (sin llamadas de red) ---
 if not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
-    logger.warning("MINIO_ACCESS_KEY o MINIO_SECRET_KEY no están definidos. "
-                   "Si vas a usar MinIO, configúralos en el entorno.")
+    logger.warning(
+        "MINIO_ACCESS_KEY o MINIO_SECRET_KEY no están definidos. "
+        "Si vas a usar MinIO, configúralos en el entorno."
+    )
 
 # --- Cliente MinIO para operaciones (upload, download, delete) ---
 minio_internal = Minio(
@@ -33,16 +35,13 @@ minio_internal = Minio(
     secure=MINIO_SECURE
 )
 
-# --- Cliente MinIO SOLO para generar URLs públicas firmadas ---
-# Este cliente usa el endpoint público (cdn.meximova.com) para que las URLs
-# generadas usen ese dominio. No se usa para ninguna otra operación.
+# Cliente MinIO para generar URLs firmadas
 minio_signer = Minio(
-    endpoint=MINIO_ENDPOINT_PUBLIC,
+    endpoint=MINIO_ENDPOINT,  # siempre apunta al MinIO real
     access_key=MINIO_ACCESS_KEY,
     secret_key=MINIO_SECRET_KEY,
-    secure=MINIO_USE_SSL
+    secure=MINIO_SECURE
 )
-
 
 # ================== Redis ==================
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
@@ -84,7 +83,6 @@ MEDIA_URL_EXPIRES = timedelta(seconds=MEDIA_URL_TTL_SECONDS)
 
 # ================== Job Queue ==================
 MEDIA_JOBS_QUEUE_KEY = "media:jobs"
-
 
 # --- utilidades ---
 def _try_bucket_exists_positional(client, bucket_name):
