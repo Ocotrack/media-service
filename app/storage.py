@@ -26,14 +26,11 @@ def delete_object(path: str):
 def generate_signed_url(path: str) -> str:
     """Genera URL firmada directamente con el CDN público."""
     try:
-        expires_seconds = int(MEDIA_URL_EXPIRES.total_seconds())
-
         url = minio_public.presigned_get_object(
             bucket_name=MINIO_BUCKET,
             object_name=path,
-            expires=expires_seconds
+            expires=MEDIA_URL_EXPIRES  # PASAR timedelta directamente, no int
         )
-
         return url
     except S3Error as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate signed URL: {str(e)}") from e
