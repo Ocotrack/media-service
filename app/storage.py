@@ -25,6 +25,17 @@ def delete_object(path: str):
         raise HTTPException(status_code=500, detail=f"Delete from MinIO failed: {str(e)}") from e
 
 def generate_signed_url(path: str) -> str:
+    try:
+        url = minio_internal.presigned_get_object(
+            bucket_name=MINIO_BUCKET,
+            object_name=path,
+            expires=MEDIA_URL_EXPIRES,
+        )
+        url = url.replace("minio:9003", "cdn.meximova.com:80")
+        return url
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate signed URL: {e}")
+
     """
     Genera URL firmada usando el host público (cdn.meximova.com:80)
     Listo para usarse directamente en el frontend
