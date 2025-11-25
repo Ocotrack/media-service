@@ -176,7 +176,10 @@ async def generate_media_url(
     if not item:
         raise HTTPException(status_code=404, detail="Media not found")
 
-    if item.client_id != client_id or item.user_id != user_id:
+    if item.client_id != client_id:
+        raise HTTPException(status_code=403, detail="Unauthorized for this path")
+    
+    if user_id and item.user_id != user_id:
         raise HTTPException(status_code=403, detail="Unauthorized for this path")
 
     if item.status != "ready":
@@ -199,7 +202,10 @@ async def update_media(
     if not item:
         raise HTTPException(status_code=404, detail="Media not found")
 
-    if item.client_id != client_id or item.user_id != user_id:
+    if item.client_id != client_id:
+        raise HTTPException(status_code=403, detail="Unauthorized for this path")
+    
+    if user_id and item.user_id != user_id:
         raise HTTPException(status_code=403, detail="Unauthorized for this path")
 
     content_type = file.content_type or ""
@@ -280,7 +286,10 @@ async def delete_media(
     if not item:
         raise HTTPException(status_code=404, detail="Media not found")
 
-    if item.client_id != client_id or item.user_id != user_id:
+    if item.client_id != client_id:
+        raise HTTPException(status_code=403, detail="Unauthorized for this path")
+    
+    if user_id and item.user_id != user_id:
         raise HTTPException(status_code=403, detail="Unauthorized for this path")
 
     delete_object(item.path)
@@ -301,7 +310,10 @@ async def download_media(
     if not item:
         raise HTTPException(status_code=404, detail="Media not found")
 
-    if item.client_id != client_id or item.user_id != user_id:
+    if item.client_id != client_id:
+        raise HTTPException(status_code=403, detail="Unauthorized for this path")
+    
+    if user_id and item.user_id != user_id:
         raise HTTPException(status_code=403, detail="Unauthorized for this path")
 
     if item.status != "ready":
