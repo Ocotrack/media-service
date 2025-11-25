@@ -16,7 +16,7 @@ minio_internal = Minio(
 # --- Cliente para generar URLs firmadas públicas vía CDN ---
 # La firma se genera para el host que verá el cliente: cdn.meximova.com
 minio_signer = Minio(
-    endpoint="cdn.meximova.com:80",  # host público que usará la URL
+    endpoint="cdn.meximova.com",  # host público que usará la URL
     access_key=MINIO_ACCESS_KEY,
     secret_key=MINIO_SECRET_KEY,
     secure=False,  # HTTP en CDN
