@@ -29,7 +29,7 @@ def generate_signed_url(path: str) -> str:
         url = minio_public.presigned_get_object(
             bucket_name=MINIO_BUCKET,
             object_name=path,
-            expires=MEDIA_URL_EXPIRES  # PASAR timedelta directamente, no int
+            expires=MEDIA_URL_EXPIRES
         )
         return url
     except S3Error as e:
