@@ -31,7 +31,7 @@ def generate_signed_url(path: str) -> str:
             object_name=path,
             expires=MEDIA_URL_EXPIRES,
         )
-        url = url.replace("minio:9003", "cdn.meximova.com:80")
+        url = url.replace("minio:9003", "cdn.meximova.com")
         return url
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate signed URL: {e}")
