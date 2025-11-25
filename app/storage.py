@@ -1,25 +1,16 @@
 import io
-import logging
 from fastapi import HTTPException
 from minio import Minio
-from minio.error import S3Error, BucketAlreadyOwnedByYou, BucketAlreadyExists
+from minio.error import S3Error
 from .config import MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_BUCKET
 
-logger = logging.getLogger(__name__)
-
+# Cliente MinIO
 minio_client = Minio(
     endpoint="minio:9003",
     access_key=MINIO_ACCESS_KEY,
     secret_key=MINIO_SECRET_KEY,
-    secure=False,
+    secure=False,  # cambiar a True si usas HTTPS
 )
-
-try:
-    if not minio_client.bucket_exists(MINIO_BUCKET):
-        minio_client.make_bucket(MINIO_BUCKET)
-        logger.info("Bucket creado automáticamente: %s", MINIO_BUCKET)
-except (S3Error, BucketAlreadyOwnedByYou, BucketAlreadyExists) as e:
-    logger.warning("Error verificando/creando bucket '%s': %s", MINIO_BUCKET, e)
 
 
 def upload_bytes(path: str, data: bytes, content_type: str):
@@ -34,6 +25,7 @@ def upload_bytes(path: str, data: bytes, content_type: str):
             length=len(data),
             content_type=content_type,
         )
+        # Hacer objeto público
         minio_client.set_object_acl(MINIO_BUCKET, path, "public-read")
     except S3Error as e:
         raise HTTPException(status_code=500, detail=f"Upload to MinIO failed: {str(e)}") from e
