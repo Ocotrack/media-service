@@ -1,7 +1,8 @@
 import io
 from fastapi import HTTPException
+from urllib.parse import urlparse, urlunparse
 from minio.error import S3Error
-from .config import minio_internal, minio_signer, MINIO_BUCKET, MEDIA_URL_EXPIRES
+from .config import minio_internal, MINIO_BUCKET, MEDIA_URL_EXPIRES
 
 
 def upload_bytes(path: str, data: bytes, content_type: str):
@@ -36,18 +37,30 @@ def delete_object(path: str):
 
 def generate_signed_url(path: str) -> str:
     """
-    Genera URL firmada usando el endpoint público (CDN).
+    Genera una URL firmada que apunta al CDN público (Apache reverse proxy).
     """
     try:
-        return minio_signer.presigned_get_object(
+        # URL firmada usando MinIO interno
+        url = minio_internal.presigned_get_object(
             bucket_name=MINIO_BUCKET,
             object_name=path,
             expires=MEDIA_URL_EXPIRES,
         )
-    except S3Error as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate signed URL (S3Error): {str(e)}") from e
+
+        # Reescribir host y path para el proxy Apache
+        parsed = urlparse(url)
+        parsed = parsed._replace(
+            scheme="http",               # protocolo del proxy
+            netloc="cdn.meximova.com",   # host público
+            path=f"/media/{path}"        # coincide con ProxyPass /media/
+        )
+        return urlunparse(parsed)
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate signed URL: {type(e).__name__} - {str(e)}") from e
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate signed URL: {type(e).__name__} - {str(e)}"
+        )
 
 
 def get_object_stream(path: str):
