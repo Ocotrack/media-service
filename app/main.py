@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException, Header, Depends, Query
 from fastapi.responses import StreamingResponse
 
-from .config import API_KEYS_MAP, MEDIA_URL_TTL_SECONDS
+from .config import API_KEYS_MAP, MEDIA_URL_TTL_SECONDS, CDN_HOST
 from .models import (
     MediaItem,
     save_media,
@@ -80,19 +80,12 @@ async def upload_media(
     user_id: Optional[str] = Depends(get_current_user),
     folder: str = Depends(get_folder),
 ):
-    """
-    Upload media:
-    - Small images: compressed inline → WEBP.
-    - Large images & all videos: uploaded quickly and processed async via queue.
-    """
     content_type = file.content_type or ""
     media_id = str(uuid.uuid4())
     base_path = build_base_path(client_id, folder, user_id, media_id)
 
-    # Images
     if content_type.startswith("image/"):
         raw = await file.read()
-        # Threshold: inline if <= 3MB, else async
         if len(raw) <= 3 * 1024 * 1024:
             compressed, new_type, ext = compress_image_aggressive(raw)
             final_path = f"{base_path}.{ext}"
@@ -179,10 +172,6 @@ async def generate_media_url(
     client_id: str = Depends(get_client_id),
     user_id: Optional[str] = Depends(get_current_user),
 ):
-    """
-    Return signed URL only if media is ready.
-    If still processing, return 409 so the mobile app can retry later.
-    """
     item = get_media_by_path(path)
     if not item:
         raise HTTPException(status_code=404, detail="Media not found")
@@ -193,20 +182,19 @@ async def generate_media_url(
     if item.status != "ready":
         raise HTTPException(status_code=409, detail="Media is still processing")
 
+    # Generamos la URL firmada usando storage.py
     url = generate_signed_url(item.path)
+
     return {"url": url, "expires_in": MEDIA_URL_TTL_SECONDS}
 
 
 @app.put("/media", response_model=MediaItem, summary="Update existing media by path")
 async def update_media(
-    path: str = Query(..., description="Internal path previously returned (MediaItem.path)"),
+    path: str = Query(...),
     file: UploadFile = File(...),
     client_id: str = Depends(get_client_id),
     user_id: Optional[str] = Depends(get_current_user),
 ):
-    """
-    Replace existing media (image/video). Uses same async/sync strategy as upload.
-    """
     item = get_media_by_path(path)
     if not item:
         raise HTTPException(status_code=404, detail="Media not found")
@@ -215,7 +203,6 @@ async def update_media(
         raise HTTPException(status_code=403, detail="Unauthorized for this path")
 
     content_type = file.content_type or ""
-
     base_path = path.rsplit(".", 1)[0]
 
     if content_type.startswith("image/"):
@@ -285,11 +272,10 @@ async def update_media(
 
 @app.delete("/media", summary="Delete media by path")
 async def delete_media(
-    path: str = Query(..., description="Internal path previously returned (MediaItem.path)"),
+    path: str = Query(...),
     client_id: str = Depends(get_client_id),
     user_id: Optional[str] = Depends(get_current_user),
 ):
-    """Delete media object and its metadata."""
     item = get_media_by_path(path)
     if not item:
         raise HTTPException(status_code=404, detail="Media not found")
@@ -298,7 +284,6 @@ async def delete_media(
         raise HTTPException(status_code=403, detail="Unauthorized for this path")
 
     delete_object(item.path)
-
     if item.original_path:
         delete_object(item.original_path)
 
@@ -308,11 +293,10 @@ async def delete_media(
 
 @app.get("/media/download", summary="Download media content (stream)")
 async def download_media(
-    path: str = Query(..., description="Internal path previously returned (MediaItem.path)"),
+    path: str = Query(...),
     client_id: str = Depends(get_client_id),
     user_id: Optional[str] = Depends(get_current_user),
 ):
-    """Stream media if it's ready."""
     item = get_media_by_path(path)
     if not item:
         raise HTTPException(status_code=404, detail="Media not found")
@@ -330,7 +314,5 @@ async def download_media(
     return StreamingResponse(
         obj,
         media_type=item.content_type or "application/octet-stream",
-        headers={
-            "Content-Disposition": f'inline; filename="{item.filename}"'
-        },
+        headers={"Content-Disposition": f'inline; filename="{item.filename}"'},
     )

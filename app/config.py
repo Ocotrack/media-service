@@ -1,4 +1,3 @@
-# app/config.py
 import os
 import logging
 from datetime import timedelta
@@ -8,35 +7,36 @@ from minio import Minio
 from minio.error import S3Error
 
 load_dotenv()
-
 logger = logging.getLogger(__name__)
 
 # --- Configuración desde entorno ---
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9003")           # MinIO interno
-MINIO_ENDPOINT_PUBLIC = os.getenv("MINIO_ENDPOINT_PUBLIC", "cdn.meximova.com:80")  # Host público para URLs firmadas
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9003")  # servicio interno Docker
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "media")
 MINIO_SECURE = os.getenv("MINIO_USE_SSL", "false").lower() in ("1", "true", "yes")
 
+# Host público para reemplazar en la URL firmada
+CDN_HOST = os.getenv("CDN_HOST", "cdn.meximova.com")
+
 # --- Validaciones básicas ---
 if not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
     logger.warning("MINIO_ACCESS_KEY o MINIO_SECRET_KEY no están definidos.")
 
-# --- Cliente MinIO para operaciones internas ---
+# --- Cliente MinIO para operaciones ---
 minio_internal = Minio(
     endpoint=MINIO_ENDPOINT,
     access_key=MINIO_ACCESS_KEY,
     secret_key=MINIO_SECRET_KEY,
-    secure=False  # interno, no SSL
+    secure=MINIO_SECURE
 )
 
-# --- Cliente MinIO para firmar URLs (usa host público)
+# Cliente para firmar URLs (usa endpoint interno)
 minio_signer = Minio(
-    endpoint=MINIO_ENDPOINT_PUBLIC,
+    endpoint=MINIO_ENDPOINT,
     access_key=MINIO_ACCESS_KEY,
     secret_key=MINIO_SECRET_KEY,
-    secure=False  # puerto 80
+    secure=MINIO_SECURE
 )
 
 # ================== Redis ==================
@@ -76,6 +76,3 @@ if not API_KEYS_MAP:
 # ================== Signed URL TTL ==================
 MEDIA_URL_TTL_SECONDS = int(os.getenv("MEDIA_URL_TTL_SECONDS", "300"))
 MEDIA_URL_EXPIRES = timedelta(seconds=MEDIA_URL_TTL_SECONDS)
-
-# ================== Job Queue ==================
-MEDIA_JOBS_QUEUE_KEY = "media:jobs"
