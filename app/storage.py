@@ -1,7 +1,8 @@
+# app/storage.py
 import io
 from fastapi import HTTPException
 from minio.error import S3Error
-from .config import minio_internal, minio_signer, MINIO_BUCKET, MEDIA_URL_EXPIRES
+from .config import minio_internal, minio_signer, MINIO_BUCKET, MEDIA_URL_EXPIRES, CDN_HOST
 
 def upload_bytes(path: str, data: bytes, content_type: str):
     try:
@@ -26,13 +27,12 @@ def generate_signed_url(path: str) -> str:
         url = minio_signer.presigned_get_object(
             bucket_name=MINIO_BUCKET,
             object_name=path,
-            expires=MEDIA_URL_EXPIRES,
+            expires=int(MEDIA_URL_EXPIRES.total_seconds())
         )
-        public_url = url.replace("http://minio:9003", "http://cdn.meximova.com")
-        return public_url
+        url = url.replace(minio_signer._endpoint_url, f"http://{CDN_HOST}")
+        return url
     except S3Error as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate signed URL: {str(e)}") from e
-
 
 def get_object_stream(path: str):
     try:

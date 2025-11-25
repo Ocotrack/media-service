@@ -50,7 +50,6 @@ services:
     extra_hosts:
       - "cdn.meximova.com:192.168.1.126"
       - "files.meximova.com:192.168.1.126"
-      - "casamagoswis.ddns.net:192.168.1.126"
     restart: unless-stopped
 
 volumes:

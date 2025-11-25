@@ -1,3 +1,4 @@
+# app/config.py
 import os
 import logging
 from datetime import timedelta
@@ -23,7 +24,7 @@ CDN_HOST = os.getenv("CDN_HOST", "cdn.meximova.com")
 if not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
     logger.warning("MINIO_ACCESS_KEY o MINIO_SECRET_KEY no están definidos.")
 
-# --- Cliente MinIO para operaciones ---
+# --- Cliente MinIO para operaciones internas (upload/download) ---
 minio_internal = Minio(
     endpoint=MINIO_ENDPOINT,
     access_key=MINIO_ACCESS_KEY,
@@ -31,13 +32,9 @@ minio_internal = Minio(
     secure=MINIO_SECURE
 )
 
-# Cliente para firmar URLs (usa endpoint interno)
-minio_signer = Minio(
-    endpoint=MINIO_ENDPOINT,
-    access_key=MINIO_ACCESS_KEY,
-    secret_key=MINIO_SECRET_KEY,
-    secure=MINIO_SECURE
-)
+# --- Cliente para firmar URLs ---
+# Usaremos minio_internal pero luego reemplazaremos el host en la URL
+minio_signer = minio_internal
 
 # ================== Redis ==================
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
@@ -76,4 +73,6 @@ if not API_KEYS_MAP:
 # ================== Signed URL TTL ==================
 MEDIA_URL_TTL_SECONDS = int(os.getenv("MEDIA_URL_TTL_SECONDS", "300"))
 MEDIA_URL_EXPIRES = timedelta(seconds=MEDIA_URL_TTL_SECONDS)
+
+# ================== Job Queue ==================
 MEDIA_JOBS_QUEUE_KEY = "media:jobs"
