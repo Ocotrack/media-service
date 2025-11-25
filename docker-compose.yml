@@ -48,7 +48,7 @@ services:
     ports:
       - "8002:8002"
     extra_hosts:
-      - "cdn.meximova.com:192.168.1.126"
+      - "cdn.meximova.com:192.168.1.123"
       - "files.meximova.com:192.168.1.126"
     restart: unless-stopped
 
