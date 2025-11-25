@@ -41,7 +41,7 @@ def generate_signed_url(path: str) -> str:
     Incluye el prefijo /media/ en la firma para que coincida con ProxyPass.
     """
     try:
-        presigned_path = f"media/{path}"
+        presigned_path = f"/{path}"
 
         url = minio_internal.presigned_get_object(
             bucket_name=MINIO_BUCKET,
