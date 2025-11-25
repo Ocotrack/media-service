@@ -1,4 +1,3 @@
-# app/storage.py
 import io
 from fastapi import HTTPException
 from minio.error import S3Error
@@ -24,11 +23,14 @@ def delete_object(path: str):
 
 def generate_signed_url(path: str) -> str:
     try:
+        expires_seconds = int(MEDIA_URL_EXPIRES.total_seconds())
+
         url = minio_signer.presigned_get_object(
             bucket_name=MINIO_BUCKET,
             object_name=path,
-            expires=int(MEDIA_URL_EXPIRES.total_seconds())
+            expires=expires_seconds
         )
+
         url = url.replace(minio_signer._endpoint_url, f"http://{CDN_HOST}")
         return url
     except S3Error as e:
