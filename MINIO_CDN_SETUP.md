@@ -1,202 +1,152 @@
-# Configuración de Almacenamiento MinIO con CDN y URLs Firmadas
+# Configuración de Almacenamiento MinIO con Apache2 y CDN
 
-Este documento detalla la arquitectura y configuración necesaria para desplegar un sistema de almacenamiento de archivos robusto utilizando MinIO, expuesto a través de un CDN/Reverse Proxy, y asegurado mediante URLs firmadas.
+Este documento detalla la arquitectura y configuración específica para el proyecto `media-service`, utilizando MinIO como almacenamiento y **Apache2** como Reverse Proxy/CDN para la entrega de contenido público mediante URLs firmadas.
 
-## 1. Arquitectura del Sistema
+## 1. Arquitectura del Proyecto
 
-El sistema se compone de tres capas principales:
+*   **MinIO (Docker)**:
+    *   Contenedor: `minio`
+    *   Puerto API Interno: `9003` (Mapeado en `docker-compose.yml`)
+    *   Puerto Consola: `9004`
+    *   Volumen: `minio_data`
+*   **Media Service (App)**:
+    *   Genera URLs firmadas apuntando a `cdn.meximova.com`.
+    *   Usa cliente interno (`minio:9003`) para subir archivos.
+    *   Usa cliente público (`cdn.meximova.com`) **solo** para firmar URLs.
+*   **CDN / Proxy (Apache2)**:
+    *   Servidor que recibe el tráfico de internet (`cdn.meximova.com`).
+    *   Redirige las peticiones al puerto `9003` del servidor donde corre Docker.
 
-1.  **Capa de Almacenamiento (MinIO Server)**:
-    *   Responsable de guardar los objetos (imágenes, videos, documentos).
-    *   No expuesto directamente a internet.
-    *   Escucha en puertos internos (ej: 9003 API, 9004 Consola).
+---
 
-2.  **Capa de Acceso Público (CDN / Reverse Proxy)**:
-    *   Servidor web (Nginx/Apache) que actúa como puerta de enlace.
-    *   Maneja SSL/TLS (HTTPS).
-    *   Redirige el tráfico autorizado al servidor MinIO.
-    *   Dominio ejemplo: `cdn.meximova.com`.
+## 2. Configuración de Apache2 (Reverse Proxy)
 
-3.  **Capa de Aplicación (Media Service)**:
-    *   Microservicio que gestiona la lógica de negocio.
-    *   Se conecta a MinIO internamente para subir/borrar archivos.
-    *   Genera URLs firmadas usando el dominio público del CDN para que los clientes (App Móvil/Web) puedan descargar el contenido.
+Esta configuración debe aplicarse en el servidor que atiende el dominio `cdn.meximova.com`. Es fundamental activar los módulos de proxy.
 
+### Habilitar módulos necesarios
+```bash
+sudo a2enmod proxy
+sudo a2enmod proxy_http
+sudo a2enmod headers
+sudo a2enmod rewrite
+sudo systemctl restart apache2
+```
 
-## 2. Configuración del Servidor MinIO
+### Archivo de VirtualHost (`/etc/apache2/sites-available/cdn.meximova.com.conf`)
 
-### Requisitos
-*   Docker y Docker Compose instalados.
-*   Volumen de datos persistente.
+```apache
+<VirtualHost *:80>
+    ServerName cdn.meximova.com
+    ServerAdmin admin@meximova.com
 
-### Docker Compose (Ejemplo)
+    # Logs
+    ErrorLog ${APACHE_LOG_DIR}/cdn_minio_error.log
+    CustomLog ${APACHE_LOG_DIR}/cdn_minio_access.log combined
+
+    # ==================================================================
+    # Configuración Crítica para MinIO y URLs Firmadas
+    # ==================================================================
+    
+    # 1. Preservar el Host original
+    # Esto es OBLIGATORIO. Si Apache cambia el host a 'localhost' o IP,
+    # la firma de AWS S3 fallará (SignatureDoesNotMatch).
+    ProxyPreserveHost On
+
+    # 2. No decodificar URLs
+    # Evita que Apache modifique caracteres especiales en la firma
+    AllowEncodedSlashes On
+
+    # 3. Configuración del Proxy
+    # Redirige todo el tráfico al puerto API de MinIO (9003)
+    # Asumiendo que MinIO corre en el mismo servidor (localhost) o IP interna.
+    ProxyPass / http://127.0.0.1:9003/ nocanon
+    ProxyPassReverse / http://127.0.0.1:9003/
+
+    # 4. Ajustes de Headers (Opcional pero recomendado)
+    # Ocultar headers internos de MinIO por seguridad
+    Header unset Server
+    Header unset X-Minio-Deployment-Id
+    Header unset X-Amz-Request-Id
+
+    # 5. Configuración para archivos grandes (si aplica)
+    # Desactivar buffering para streaming directo
+    # ProxyIOBufferSize 65536
+</VirtualHost>
+```
+
+> **Nota sobre SSL**: Si usas HTTPS (recomendado), la configuración es idéntica dentro del bloque `<VirtualHost *:443>`, añadiendo las directivas `SSLEngine` y certificados.
+
+---
+
+## 3. Configuración del Proyecto (`media-service`)
+
+Asegúrate de que las variables de entorno en `.env` coincidan con esta arquitectura.
+
+### Archivo `.env`
+
+```bash
+# --- MinIO Credenciales ---
+MINIO_ACCESS_KEY=admin
+MINIO_SECRET_KEY=Casamago1.
+MINIO_BUCKET=media
+
+# --- Configuración de Red ---
+
+# 1. Endpoint Interno (Docker)
+# Usado por la app para subir/borrar archivos.
+# Debe ser el nombre del servicio en docker-compose y el puerto interno.
+MINIO_ENDPOINT_INTERNAL=minio:9003
+
+# 2. Endpoint Público (CDN)
+# Usado EXCLUSIVAMENTE para generar la firma de la URL.
+# Debe coincidir con el ServerName de Apache.
+# Si Apache escucha en puerto 80, poner solo el dominio o dominio:80.
+CDN_HOST=cdn.meximova.com:80
+
+# SSL
+# Poner 'true' solo si Apache tiene HTTPS configurado.
+MINIO_USE_SSL=false
+```
+
+### Archivo `docker-compose.yml`
+
+Es vital que el puerto `9003` esté expuesto en el host para que Apache pueda conectarse a él.
 
 ```yaml
 services:
   minio:
-    image: minio/minio:latest
-    container_name: minio
-    restart: unless-stopped
     command: server /data --address ":9003" --console-address ":9004"
     ports:
-      - "9003:9003" # API S3 (Interno)
-      - "9004:9004" # Consola Web (Interno)
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
-      # Importante: No configurar MINIO_BROWSER_REDIRECT_URL si se usa proxy transparente
-    volumes:
-      - minio_data:/data
-
-volumes:
-  minio_data:
-```
-
-### Variables de Entorno (.env)
-```bash
-MINIO_ACCESS_KEY=admin_user
-MINIO_SECRET_KEY=super_secure_password_123
+      - "9003:9003" # API S3 (Apache se conecta aquí)
+      - "9004:9004" # Consola Web
+    # ... resto de la configuración
 ```
 
 ---
 
-## 3. Configuración del CDN / Reverse Proxy (Nginx)
+## 4. Solución de Problemas Comunes
 
-Este servidor expone MinIO al mundo. Debe estar configurado para pasar las cabeceras correctamente, lo cual es crítico para que la validación de firma de AWS S3 funcione.
+### Error `SignatureDoesNotMatch`
+*   **Síntoma**: La URL se genera bien, pero al abrirla en el navegador da error XML `SignatureDoesNotMatch`.
+*   **Causa**: Apache no está enviando el header `Host` original a MinIO.
+*   **Solución**: Verifica que `ProxyPreserveHost On` esté activo en la config de Apache.
 
-### Configuración Nginx (`/etc/nginx/sites-available/cdn.meximova.com`)
+### Error `Connection refused` (500 Internal Server Error)
+*   **Síntoma**: La app falla al intentar generar la URL.
+*   **Causa**: La app está intentando conectarse al CDN para validar el bucket y falla (bloqueo de red o DNS).
+*   **Solución**: La app debe usar `minio_internal` para validar buckets y `minio_public` **solo** para firmar (sin conexión). El código ya fue ajustado para esto en `app/storage.py`.
 
-```nginx
-server {
-    listen 80;
-    server_name cdn.meximova.com;
-
-    # Redirección a HTTPS (Recomendado)
-    # return 301 https://$host$request_uri;
-    
-    # Configuración para servir archivos
-    location / {
-        proxy_pass http://192.168.1.3:9003; # IP Privada del servidor MinIO
-        proxy_set_header Host $http_host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # Optimizaciones para archivos grandes
-        proxy_buffering off;
-        client_max_body_size 0;
-        proxy_read_timeout 300s;
-        proxy_send_timeout 300s;
-        
-        # Ocultar cabeceras de MinIO (seguridad por oscuridad)
-        proxy_hide_header x-amz-request-id;
-        proxy_hide_header x-minio-deployment-id;
-    }
-}
-```
-
-> **Nota Crítica**: La directiva `proxy_set_header Host $http_host;` es fundamental. Si Nginx cambia el Host header, la firma generada por la aplicación no coincidirá con la que MinIO calcula, resultando en error `SignatureDoesNotMatch`.
+### Error 502 Bad Gateway (Apache)
+*   **Síntoma**: Al acceder a `cdn.meximova.com`, Apache devuelve 502.
+*   **Causa**: Apache no puede conectar con MinIO en `127.0.0.1:9003`.
+*   **Solución**: Verifica que el contenedor de MinIO esté corriendo (`docker ps`) y que el puerto `9003` esté correctamente mapeado.
 
 ---
 
-## 4. Configuración del Servicio de Aplicación (Media Service)
+## 5. Mantenimiento
 
-El servicio debe tener **dos clientes MinIO configurados**:
-
-1.  **Cliente Interno**: Para operaciones de administración (subir, borrar, verificar existencia). Se conecta directamente a la IP/DNS interno de Docker.
-2.  **Cliente Público (Signer)**: Exclusivamente para generar URLs. Se configura con el dominio público.
-
-### Variables de Entorno (.env)
-
-```bash
-# Credenciales (Mismas que en MinIO Server)
-MINIO_ACCESS_KEY=admin_user
-MINIO_SECRET_KEY=super_secure_password_123
-MINIO_BUCKET=media
-
-# Endpoint Interno (Red Docker o IP Privada)
-# Usado para uploads y checks de existencia
-MINIO_ENDPOINT_INTERNAL=minio:9003
-
-# Endpoint Público (CDN)
-# Usado SOLO para firmar URLs
-CDN_HOST=cdn.meximova.com:80  # Incluir puerto si no es estándar
-MINIO_USE_SSL=false           # True si el CDN tiene HTTPS
-```
-
-### Implementación en Código (Python/FastAPI)
-
-```python
-import os
-from minio import Minio
-
-# 1. Cliente Interno
-minio_internal = Minio(
-    endpoint=os.getenv("MINIO_ENDPOINT_INTERNAL", "minio:9003"),
-    access_key=os.getenv("MINIO_ACCESS_KEY"),
-    secret_key=os.getenv("MINIO_SECRET_KEY"),
-    secure=False # Generalmente False dentro de la red privada
-)
-
-# 2. Cliente Público (Signer)
-minio_signer = Minio(
-    endpoint=os.getenv("CDN_HOST", "cdn.meximova.com"),
-    access_key=os.getenv("MINIO_ACCESS_KEY"),
-    secret_key=os.getenv("MINIO_SECRET_KEY"),
-    secure=os.getenv("MINIO_USE_SSL") == "true"
-)
-
-def generate_signed_url(path):
-    # Usamos el cliente signer. NO verifica conexión, solo calcula firma.
-    return minio_signer.presigned_get_object(
-        bucket_name="media",
-        object_name=path,
-        expires=timedelta(minutes=5)
-    )
-
-def upload_file(path, data):
-    # Usamos el cliente interno. SÍ requiere conexión.
-    minio_internal.put_object(...)
-```
-
----
-
-## 5. Checklist de Verificación y Troubleshooting
-
-Si algo falla, sigue estos pasos en orden:
-
-### A. Conectividad Interna
-Desde el contenedor de `media-service`, verifica que puedes ver a MinIO:
-```bash
-# Dentro del contenedor
-curl -v http://minio:9003/minio/health/live
-```
-*   **Éxito**: Respuesta 200 OK.
-*   **Fallo**: Revisa redes de Docker y nombres de servicio en `docker-compose.yml`.
-
-### B. Conectividad Pública (CDN)
-Desde tu máquina local o navegador:
-```bash
-curl -v http://cdn.meximova.com/minio/health/live
-```
-*   **Éxito**: Respuesta 200 OK.
-*   **Fallo**: Revisa configuración de Nginx, DNS y Firewall (puerto 80/443 abierto).
-
-### C. Validación de Firmas
-Si obtienes `SignatureDoesNotMatch` o `403 Forbidden` al acceder a una URL firmada:
-1.  Verifica que `CDN_HOST` en la app coincida exactamente con el dominio del navegador.
-2.  Verifica que Nginx esté pasando el header `Host` (`proxy_set_header Host $http_host;`).
-3.  Asegúrate de que la hora del servidor MinIO y la del servidor de Aplicación estén sincronizadas (NTP).
-
-### D. Errores de Conexión al Generar URL
-Si la aplicación lanza error 500 al llamar a `generate_signed_url`:
-*   **Causa**: El cliente MinIO está intentando conectarse al CDN para validar el bucket y falla (por firewall o DNS interno).
-*   **Solución**: Asegúrate de que el código **NO** llame a `bucket_exists` usando el cliente `minio_signer`. Solo usa `presigned_get_object`.
-
----
-
-## 6. Resiliencia y Mantenimiento
-
-*   **Cambio de Dominio**: Solo necesitas actualizar la variable `CDN_HOST` en el `media-service` y la configuración `server_name` en Nginx. No requiere reiniciar MinIO.
-*   **Rotación de Claves**: Si cambias las claves en MinIO, debes actualizarlas en `media-service` inmediatamente. Las URLs generadas anteriormente dejarán de funcionar.
-*   **Backup**: Respalda regularmente el volumen `minio_data`.
+*   **Rotación de Claves**: Si cambias `MINIO_ACCESS_KEY` o `SECRET` en MinIO, debes actualizarlas en el `.env` del `media-service` y reiniciar el contenedor. Apache no necesita cambios.
+*   **Cambio de Dominio**: Si cambias a `archivos.meximova.com`:
+    1.  Actualiza `ServerName` en Apache.
+    2.  Actualiza `CDN_HOST` en `.env`.
+    3.  Reinicia Apache y `media-service`.
