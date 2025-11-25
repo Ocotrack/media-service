@@ -37,22 +37,22 @@ def delete_object(path: str):
 
 def generate_signed_url(path: str) -> str:
     """
-    Genera una URL firmada que apunta al CDN público (Apache reverse proxy).
+    Genera una URL firmada apuntando al CDN público (Apache reverse proxy /media/).
+    Incluye el prefijo /media/ en la firma para que coincida con ProxyPass.
     """
     try:
-        # URL firmada usando MinIO interno
+        presigned_path = f"media/{path}"
+
         url = minio_internal.presigned_get_object(
             bucket_name=MINIO_BUCKET,
-            object_name=path,
+            object_name=presigned_path,
             expires=MEDIA_URL_EXPIRES,
         )
 
-        # Reescribir host y path para el proxy Apache
         parsed = urlparse(url)
         parsed = parsed._replace(
-            scheme="http",               # protocolo del proxy
-            netloc="cdn.meximova.com",   # host público
-            path=f"/media/{path}"        # coincide con ProxyPass /media/
+            scheme="http",              
+            netloc="cdn.meximova.com"
         )
         return urlunparse(parsed)
 
