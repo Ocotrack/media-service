@@ -24,7 +24,7 @@ minio_internal = Minio(
 )
 
 # Endpoint público para generar URLs firmadas
-CDN_HOST = os.getenv("CDN_HOST", "cdn.meximova.com:80")
+CDN_HOST = os.getenv("CDN_HOST", "localhost:9003")
 minio_public = Minio(
     endpoint=CDN_HOST,
     access_key=MINIO_ACCESS_KEY,
