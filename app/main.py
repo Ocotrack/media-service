@@ -163,7 +163,31 @@ async def upload_media(
         )
         return item
 
-    raise HTTPException(status_code=400, detail="Only image/* or video/* files are allowed")
+    # Support for PDF and Excel files
+    if content_type in [
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel"
+    ]:
+        raw = await file.read()
+        original_ext = os.path.splitext(file.filename or "")[1] or ".file"
+        final_path = f"{base_path}{original_ext}"
+        upload_bytes(final_path, raw, content_type)
+
+        item = MediaItem(
+            id=media_id,
+            filename=file.filename,
+            content_type=content_type,
+            path=final_path,
+            user_id=user_id,
+            client_id=client_id,
+            folder=folder,
+            status="ready",
+        )
+        save_media(item)
+        return item
+
+    raise HTTPException(status_code=400, detail="Only image/*, video/*, PDF, or Excel files are allowed")
 
 
 @app.get("/media/url", summary="Generate signed URL for media access")
@@ -273,7 +297,26 @@ async def update_media(
         )
         return item
 
-    raise HTTPException(status_code=400, detail="Only image/* or video/* files are allowed")
+    # Support for PDF and Excel files
+    if content_type in [
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel"
+    ]:
+        raw = await file.read()
+        original_ext = os.path.splitext(file.filename or "")[1] or ".file"
+        final_path = f"{base_path}{original_ext}"
+        upload_bytes(final_path, raw, content_type)
+
+        item.filename = file.filename
+        item.content_type = content_type
+        item.path = final_path
+        item.status = "ready"
+        item.original_path = None
+        save_media(item)
+        return item
+
+    raise HTTPException(status_code=400, detail="Only image/*, video/*, PDF, or Excel files are allowed")
 
 
 @app.delete("/media", summary="Delete media by path")
