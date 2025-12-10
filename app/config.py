@@ -29,7 +29,8 @@ minio_public = Minio(
     endpoint=CDN_HOST,
     access_key=MINIO_ACCESS_KEY,
     secret_key=MINIO_SECRET_KEY,
-    secure=False
+    secure=False,
+    region=os.getenv("MINIO_REGION", "us-east-1"),
 )
 
 if not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
