@@ -23,7 +23,7 @@ minio_internal = Minio(
     secure=MINIO_SECURE
 )
 
-CDN_HOST = os.getenv("CDN_HOST", "localhost:9003")
+CDN_HOST = os.getenv("MINIO_ENDPOINT_PUBLIC") or os.getenv("CDN_HOST", "localhost:9003")
 minio_public = Minio(
     endpoint=CDN_HOST,
     access_key=MINIO_ACCESS_KEY,
