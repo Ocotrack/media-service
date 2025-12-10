@@ -23,7 +23,6 @@ minio_internal = Minio(
     secure=MINIO_SECURE
 )
 
-# Endpoint público para generar URLs firmadas
 CDN_HOST = os.getenv("CDN_HOST", "localhost:9003")
 minio_public = Minio(
     endpoint=CDN_HOST,
