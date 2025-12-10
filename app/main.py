@@ -203,7 +203,7 @@ async def generate_media_url(
     if item.client_id != client_id:
         raise HTTPException(status_code=403, detail="Unauthorized for this path")
     
-    if user_id and item.user_id != user_id:
+    if item.user_id and user_id and item.user_id != user_id:
         raise HTTPException(status_code=403, detail="Unauthorized for this path")
 
     if item.status != "ready":
@@ -356,7 +356,7 @@ async def download_media(
     if item.client_id != client_id:
         raise HTTPException(status_code=403, detail="Unauthorized for this path")
     
-    if user_id and item.user_id != user_id:
+    if item.user_id and user_id and item.user_id != user_id:
         raise HTTPException(status_code=403, detail="Unauthorized for this path")
 
     if item.status != "ready":
