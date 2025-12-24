@@ -13,14 +13,6 @@ services:
       - "9004:9004" # Consola MinIO
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
-    container_name: redis
-    command: [ "redis-server", "--requirepass", "${REDIS_PASSWORD}" ]
-    ports:
-      - "6379:6379"
-    restart: unless-stopped
-
   media-service:
     build:
       context: .
@@ -28,7 +20,6 @@ services:
     container_name: media-service
     depends_on:
       - minio
-      - redis
     environment:
       MINIO_ENDPOINT_INTERNAL: ${MINIO_ENDPOINT_INTERNAL}
       MINIO_ENDPOINT_PUBLIC: ${MINIO_ENDPOINT_PUBLIC}
@@ -36,12 +27,9 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       MINIO_USE_SSL: ${MINIO_USE_SSL}
+      MINIO_PUBLIC_USE_SSL: ${MINIO_PUBLIC_USE_SSL}
       MINIO_BUCKET: ${MINIO_BUCKET}
       MEDIA_URL_TTL_SECONDS: ${MEDIA_URL_TTL_SECONDS}
-      REDIS_HOST: ${REDIS_HOST}
-      REDIS_PORT: ${REDIS_PORT}
-      REDIS_DB: ${REDIS_DB}
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
       API_KEYS: ${API_KEYS}
       PORT: ${PORT}
       ENV: ${ENV}

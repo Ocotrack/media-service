@@ -4,4 +4,3 @@ python-multipart
 minio
 Pillow
 python-dotenv
-redis

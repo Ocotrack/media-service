@@ -2,7 +2,6 @@ import os
 import logging
 from datetime import timedelta
 from dotenv import load_dotenv
-from redis import Redis
 from minio import Minio
 
 load_dotenv()
@@ -23,31 +22,18 @@ minio_internal = Minio(
     secure=MINIO_SECURE
 )
 
+MINIO_PUBLIC_USE_SSL = os.getenv("MINIO_PUBLIC_USE_SSL", "false").lower() in ("1", "true", "yes")
 CDN_HOST = os.getenv("MINIO_ENDPOINT_PUBLIC") or os.getenv("CDN_HOST", "localhost:9003")
 minio_public = Minio(
     endpoint=CDN_HOST,
     access_key=MINIO_ACCESS_KEY,
     secret_key=MINIO_SECRET_KEY,
-    secure=False,
+    secure=MINIO_PUBLIC_USE_SSL,  # Use the new SSL config for public URLs
     region=os.getenv("MINIO_REGION", "us-east-1"),
 )
 
 if not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
     logger.warning("MINIO_ACCESS_KEY o MINIO_SECRET_KEY no están definidos.")
-
-# ================== Redis ==================
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-REDIS_DB = int(os.getenv("REDIS_DB", "0"))
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
-
-redis_client = Redis(
-    host=REDIS_HOST,
-    port=REDIS_PORT,
-    db=REDIS_DB,
-    password=REDIS_PASSWORD or None,
-    decode_responses=True,
-)
 
 # ================== API Keys ==================
 RAW_API_KEYS = os.getenv("API_KEYS", "")
@@ -72,6 +58,3 @@ if not API_KEYS_MAP:
 # ================== Signed URL TTL ==================
 MEDIA_URL_TTL_SECONDS = int(os.getenv("MEDIA_URL_TTL_SECONDS", "300"))
 MEDIA_URL_EXPIRES = timedelta(seconds=MEDIA_URL_TTL_SECONDS)
-
-# ================== Job Queue ==================
-MEDIA_JOBS_QUEUE_KEY = "media:jobs"

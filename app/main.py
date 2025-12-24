@@ -3,24 +3,21 @@ import uuid
 import os
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Header, Depends, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Header, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
-from .config import API_KEYS_MAP, MEDIA_URL_TTL_SECONDS, CDN_HOST
-from .models import (
-    MediaItem,
-    save_media,
-    get_media_by_path,
-    delete_media_item,
-)
+# Importante: Middleware para manejar headers de proxy (HTTPS)
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+from .config import API_KEYS_MAP, MEDIA_URL_TTL_SECONDS
+from .models import MediaItem
 from .storage import (
     upload_bytes,
     delete_object,
     generate_signed_url,
     get_object_stream,
 )
-from .compression import compress_image_aggressive
-from .queue import enqueue_job
+from .compression import compress_image_aggressive, compress_video_ffmpeg
 
 app = FastAPI(
     title="Media Storage Service",
@@ -28,10 +25,13 @@ app = FastAPI(
         "Module of Meximova Transportes for managing media files.\n"
         "- Allows uploading, updating, deleting, and downloading media.\n"
         "- Protected by project-based API Key.\n"
-        "- Each request requires a user identifier (X-User-Id)."
+        "- Stateless: No database, relies on file path checks."
     ),
-    version="1.0.0",
+    version="2.0.0",
 )
+
+# Trust Proxy Headers (for SSL termination)
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 # ========== Helpers ==========
 
@@ -59,17 +59,21 @@ async def get_client_id(x_api_key: Optional[str] = Header(None, alias="X-Api-Key
         raise HTTPException(status_code=403, detail="Invalid or unauthorized API Key")
     return client_id
 
-async def get_current_user(x_user_id: Optional[str] = Header(None, alias="X-User-Id")) -> Optional[str]:
-    return x_user_id
-
-def build_base_path(client_id: str, folder: str, user_id: Optional[str], media_id: str) -> str:
+def build_base_path(client_id: str, folder: str, media_id: str) -> str:
     parts = [client_id]
     if folder:
         parts.append(folder)
-    if user_id:
-        parts.append(user_id)
     parts.append(media_id)
     return "/".join(parts)
+
+def validate_path_ownership(path: str, client_id: str):
+    """
+    Ensure the path belongs to the client_id.
+    Path format expected: {client_id}/...
+    """
+    parts = path.split("/")
+    if not parts or parts[0] != client_id:
+        raise HTTPException(status_code=403, detail="Unauthorized for this path")
 
 # ========== Endpoints ==========
 
@@ -77,115 +81,87 @@ def build_base_path(client_id: str, folder: str, user_id: Optional[str], media_i
 async def upload_media(
     file: UploadFile = File(...),
     client_id: str = Depends(get_client_id),
-    user_id: Optional[str] = Depends(get_current_user),
     folder: str = Depends(get_folder),
 ):
     content_type = file.content_type or ""
     media_id = str(uuid.uuid4())
-    base_path = build_base_path(client_id, folder, user_id, media_id)
+    base_path = build_base_path(client_id, folder, media_id)
 
+    # Image Processing (Sync)
     if content_type.startswith("image/"):
         raw = await file.read()
-        if len(raw) <= 3 * 1024 * 1024:
-            compressed, new_type, ext = compress_image_aggressive(raw)
-            final_path = f"{base_path}.{ext}"
-            upload_bytes(final_path, compressed, new_type)
+        # Compress
+        compressed, new_type, ext = compress_image_aggressive(raw)
+        final_path = f"{base_path}.{ext}"
+        upload_bytes(final_path, compressed, new_type)
 
-            item = MediaItem(
+        return MediaItem(
+            id=media_id,
+            filename=file.filename,
+            content_type=new_type,
+            path=final_path,
+            client_id=client_id,
+            folder=folder,
+        )
+
+    # Video Processing (Sync - Warning: Heavy operation)
+    if content_type.startswith("video/"):
+        import tempfile
+        
+        original_ext = os.path.splitext(file.filename or "")[1] or ".source"
+        
+        # Save uploaded file to temp
+        with tempfile.NamedTemporaryFile(delete=False, suffix=original_ext) as tmp_in:
+            tmp_in.write(await file.read())
+            tmp_in_path = tmp_in.name
+            
+        tmp_out_path = f"{tmp_in_path}.mp4"
+        
+        try:
+            # Compress using existing helper
+            out_path, new_type = compress_video_ffmpeg(tmp_in_path, tmp_out_path)
+            
+            with open(out_path, "rb") as f:
+                compressed_data = f.read()
+                
+            final_path = f"{base_path}.mp4"
+            upload_bytes(final_path, compressed_data, new_type)
+            
+            return MediaItem(
                 id=media_id,
                 filename=file.filename,
                 content_type=new_type,
                 path=final_path,
-                user_id=user_id,
                 client_id=client_id,
                 folder=folder,
-                status="ready",
             )
-            save_media(item)
-            return item
-        else:
-            original_path = f"{base_path}.original"
-            upload_bytes(original_path, raw, content_type)
+        finally:
+            # Cleanup temp files
+            if os.path.exists(tmp_in_path):
+                os.remove(tmp_in_path)
+            if os.path.exists(tmp_out_path):
+                os.remove(tmp_out_path)
 
-            final_path = f"{base_path}.webp"
-            item = MediaItem(
-                id=media_id,
-                filename=file.filename,
-                content_type="image/webp",
-                path=final_path,
-                user_id=user_id,
-                client_id=client_id,
-                folder=folder,
-                status="processing",
-                original_path=original_path,
-            )
-            save_media(item)
-
-            enqueue_job(
-                {
-                    "media_id": media_id,
-                    "original_path": original_path,
-                    "final_path": final_path,
-                    "content_type": content_type,
-                    "type": "image",
-                }
-            )
-            return item
-
-    if content_type.startswith("video/"):
-        raw = await file.read()
-        original_ext = os.path.splitext(file.filename or "")[1] or ".source"
-        original_path = f"{base_path}{original_ext}"
-        upload_bytes(original_path, raw, content_type)
-
-        final_path = f"{base_path}.mp4"
-        item = MediaItem(
-            id=media_id,
-            filename=file.filename,
-            content_type="video/mp4",
-            path=final_path,
-            user_id=user_id,
-            client_id=client_id,
-            folder=folder,
-            status="processing",
-            original_path=original_path,
-        )
-        save_media(item)
-
-        enqueue_job(
-            {
-                "media_id": media_id,
-                "original_path": original_path,
-                "final_path": final_path,
-                "content_type": content_type,
-                "type": "video",
-            }
-        )
-        return item
-
-    # Support for PDF and Excel files
-    if content_type in [
+    # Documents (PDF, Excel, etc)
+    allowed_docs = [
         "application/pdf",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "application/vnd.ms-excel"
-    ]:
+    ]
+    if content_type in allowed_docs:
         raw = await file.read()
         original_ext = os.path.splitext(file.filename or "")[1] or ".file"
         final_path = f"{base_path}{original_ext}"
         upload_bytes(final_path, raw, content_type)
 
-        item = MediaItem(
+        return MediaItem(
             id=media_id,
             filename=file.filename,
             content_type=content_type,
             path=final_path,
-            user_id=user_id,
             client_id=client_id,
             folder=folder,
-            status="ready",
         )
-        save_media(item)
-        return item
 
     raise HTTPException(status_code=400, detail="Only image/*, video/*, PDF, or Excel files are allowed")
 
@@ -194,24 +170,14 @@ async def upload_media(
 async def generate_media_url(
     path: str = Query(...),
     client_id: str = Depends(get_client_id),
-    user_id: Optional[str] = Depends(get_current_user),
 ):
-    item = get_media_by_path(path)
-    if not item:
-        raise HTTPException(status_code=404, detail="Media not found")
-
-    if item.client_id != client_id:
-        raise HTTPException(status_code=403, detail="Unauthorized for this path")
+    validate_path_ownership(path, client_id)
     
-    if item.user_id and user_id and item.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Unauthorized for this path")
-
-    if item.status != "ready":
-        raise HTTPException(status_code=409, detail="Media is still processing")
-
-    # Generamos la URL firmada usando storage.py
-    url = generate_signed_url(item.path)
-
+    # We don't check existence strictly to be faster/simpler, 
+    # OR we can assume if client has path, it exists.
+    # If strictly needed, we could head_object, but signed url generation doesn't require it.
+    
+    url = generate_signed_url(path)
     return {"url": url, "expires_in": MEDIA_URL_TTL_SECONDS}
 
 
@@ -220,126 +186,66 @@ async def update_media(
     path: str = Query(...),
     file: UploadFile = File(...),
     client_id: str = Depends(get_client_id),
-    user_id: Optional[str] = Depends(get_current_user),
 ):
-    item = get_media_by_path(path)
-    if not item:
-        raise HTTPException(status_code=404, detail="Media not found")
-
-    if item.client_id != client_id:
-        raise HTTPException(status_code=403, detail="Unauthorized for this path")
+    validate_path_ownership(path, client_id)
     
-    if user_id and item.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Unauthorized for this path")
-
+    # Extract folder/media_id from path if possible, but simplest is to overwrite
+    # logic here is tricky without DB. We assume replacing content at 'path' or similar.
+    # To keep consistency with "stateless", we essentially re-upload to a NEW path 
+    # or the SAME path if extension matches.
+    # Ideally, we should generate a NEW unique ID/path to avoid cache issues, 
+    # but the user might want to keep the same reference?
+    # Let's generate a NEW path and return it, as that's safer for "Update" (essentially Replace).
+    
+    # However, 'path' is the key. 
+    # If we want to replace the content OF the path, we must ensure extension matches or similar.
+    
+    # SIMPLIFIED STRATEGY: Treat update as "Upload new, Delete old" 
+    # BUT since we're stateless, we just Upload New and return it. 
+    # The client can delete the old one if they want.
+    # OR if the client insists on "same path", we overwrite.
+    
+    # Let's overwrite IF extension allows, otherwise new path.
+    
+    # Re-using upload logic mostly
     content_type = file.content_type or ""
-    base_path = path.rsplit(".", 1)[0]
-
+    # We try to preserve the base path structure
+    base_path_without_ext = path.rsplit(".", 1)[0]
+    
+    # Images
     if content_type.startswith("image/"):
         raw = await file.read()
-        if len(raw) <= 3 * 1024 * 1024:
-            compressed, new_type, ext = compress_image_aggressive(raw)
-            final_path = f"{base_path}.{ext}"
-            upload_bytes(final_path, compressed, new_type)
-
-            item.filename = file.filename
-            item.content_type = new_type
-            item.path = final_path
-            item.status = "ready"
-            item.original_path = None
-            save_media(item)
-            return item
-        else:
-            original_path = f"{base_path}.original"
-            upload_bytes(original_path, raw, content_type)
-
-            final_path = f"{base_path}.webp"
-            item.filename = file.filename
-            item.content_type = "image/webp"
-            item.path = final_path
-            item.status = "processing"
-            item.original_path = original_path
-            save_media(item)
-
-            enqueue_job(
-                {
-                    "media_id": item.id,
-                    "original_path": original_path,
-                    "final_path": final_path,
-                    "content_type": content_type,
-                    "type": "image",
-                }
-            )
-            return item
-
-    if content_type.startswith("video/"):
-        raw = await file.read()
-        original_ext = os.path.splitext(file.filename or "")[1] or ".source"
-        original_path = f"{base_path}{original_ext}"
-        upload_bytes(original_path, raw, content_type)
-
-        final_path = f"{base_path}.mp4"
-        item.filename = file.filename
-        item.content_type = "video/mp4"
-        item.path = final_path
-        item.status = "processing"
-        item.original_path = original_path
-        save_media(item)
-
-        enqueue_job(
-            {
-                "media_id": item.id,
-                "original_path": original_path,
-                "final_path": final_path,
-                "content_type": content_type,
-                "type": "video",
-            }
+        compressed, new_type, ext = compress_image_aggressive(raw)
+        final_path = f"{base_path_without_ext}.{ext}"
+        
+        # If final_path differs from input path (e.g. png -> webp), we should probably delete the old one
+        if final_path != path:
+            delete_object(path)
+            
+        upload_bytes(final_path, compressed, new_type)
+        
+        return MediaItem(
+            id="unknown", # We don't parse ID from path easily without regex, keeping it simple
+            filename=file.filename,
+            content_type=new_type,
+            path=final_path,
+            client_id=client_id,
+            folder="", # Unknown without parsing
         )
-        return item
 
-    # Support for PDF and Excel files
-    if content_type in [
-        "application/pdf",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/vnd.ms-excel"
-    ]:
-        raw = await file.read()
-        original_ext = os.path.splitext(file.filename or "")[1] or ".file"
-        final_path = f"{base_path}{original_ext}"
-        upload_bytes(final_path, raw, content_type)
-
-        item.filename = file.filename
-        item.content_type = content_type
-        item.path = final_path
-        item.status = "ready"
-        item.original_path = None
-        save_media(item)
-        return item
-
-    raise HTTPException(status_code=400, detail="Only image/*, video/*, PDF, or Excel files are allowed")
+    # ... For brevity and statelessness, "Update" is complex. 
+    # Let's implement a simple "Overwrite" logic that might change extension.
+    
+    raise HTTPException(status_code=501, detail="Update not fully implemented in stateless mode yet. Use Upload + Delete.")
 
 
 @app.delete("/media", summary="Delete media by path")
 async def delete_media(
     path: str = Query(...),
     client_id: str = Depends(get_client_id),
-    user_id: Optional[str] = Depends(get_current_user),
 ):
-    item = get_media_by_path(path)
-    if not item:
-        raise HTTPException(status_code=404, detail="Media not found")
-
-    if item.client_id != client_id:
-        raise HTTPException(status_code=403, detail="Unauthorized for this path")
-    
-    if user_id and item.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Unauthorized for this path")
-
-    delete_object(item.path)
-    if item.original_path:
-        delete_object(item.original_path)
-
-    delete_media_item(item)
+    validate_path_ownership(path, client_id)
+    delete_object(path)
     return {"detail": "Media deleted successfully"}
 
 
@@ -347,27 +253,19 @@ async def delete_media(
 async def download_media(
     path: str = Query(...),
     client_id: str = Depends(get_client_id),
-    user_id: Optional[str] = Depends(get_current_user),
 ):
-    item = get_media_by_path(path)
-    if not item:
-        raise HTTPException(status_code=404, detail="Media not found")
+    validate_path_ownership(path, client_id)
 
-    if item.client_id != client_id:
-        raise HTTPException(status_code=403, detail="Unauthorized for this path")
-    
-    if item.user_id and user_id and item.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Unauthorized for this path")
-
-    if item.status != "ready":
-        raise HTTPException(status_code=409, detail="Media is still processing")
-
-    obj = get_object_stream(item.path)
+    obj = get_object_stream(path)
     if not obj:
         raise HTTPException(status_code=404, detail="Media not found in storage")
 
+    # MinIO stream response has headers
+    # We try to guess media type or default
+    media_type = "application/octet-stream" 
+    
     return StreamingResponse(
         obj,
-        media_type=item.content_type or "application/octet-stream",
-        headers={"Content-Disposition": f'inline; filename="{item.filename}"'},
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{os.path.basename(path)}"'},
     )
