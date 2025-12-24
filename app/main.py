@@ -23,9 +23,6 @@ app = FastAPI(
     title="Media Storage Service",
     description=(
         "Module of Meximova Transportes for managing media files.\n"
-        "- Allows uploading, updating, deleting, and downloading media.\n"
-        "- Protected by project-based API Key.\n"
-        "- Stateless: No database, relies on file path checks."
     ),
     version="2.0.0",
 )
