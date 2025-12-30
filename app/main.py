@@ -30,6 +30,12 @@ app = FastAPI(
 # Trust Proxy Headers (for SSL termination)
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
+# ========== Health Check ==========
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 # ========== Helpers ==========
 
 def sanitize_folder(folder: str) -> str:
