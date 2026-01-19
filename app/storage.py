@@ -4,6 +4,8 @@ from fastapi import HTTPException
 from minio.error import S3Error
 from .config import minio_internal, minio_public, MINIO_BUCKET, MEDIA_URL_EXPIRES
 
+logger = logging.getLogger(__name__)
+
 def upload_bytes(path: str, data: bytes, content_type: str):
     """Sube bytes a MinIO usando el endpoint interno."""
     try:
