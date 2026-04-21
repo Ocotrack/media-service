@@ -80,7 +80,7 @@ def validate_path_ownership(path: str, client_id: str):
 
 # ========== Endpoints ==========
 
-@app.post("/media", response_model=MediaItem, summary="Upload media", description="Uploads a file to storage. Accepted files: images, videos, PDF, Excel, XML.")
+@app.post("/media", response_model=MediaItem, summary="Upload media", description="Uploads a file to storage. Accepted files: images, videos, PDF, Excel, XML, EDI, TXT.")
 async def upload_media(
     file: UploadFile = File(...),
     client_id: str = Depends(get_client_id),
@@ -145,13 +145,15 @@ async def upload_media(
             if os.path.exists(tmp_out_path):
                 os.remove(tmp_out_path)
 
-    # Documents (PDF, Excel, XML, etc)
+    # Documents (PDF, Excel, XML, EDI, TXT, etc)
     allowed_docs = [
         "application/pdf",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "application/vnd.ms-excel",
         "application/xml",
-        "text/xml"
+        "text/xml",
+        "text/plain",
+        "application/edi"
     ]
     if content_type in allowed_docs:
         raw = await file.read()
@@ -168,7 +170,7 @@ async def upload_media(
             folder=folder,
         )
 
-    raise HTTPException(status_code=400, detail="Only image/*, video/*, PDF, Excel, or XML files are allowed")
+    raise HTTPException(status_code=400, detail="Only image/*, video/*, PDF, Excel, XML, or text files are allowed")
 
 
 @app.get("/media/url", summary="Generate signed URL for media access")
