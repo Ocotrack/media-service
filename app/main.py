@@ -155,9 +155,17 @@ async def upload_media(
         "text/plain",
         "application/edi"
     ]
-    if content_type in allowed_docs:
+    allowed_exts = [".edi", ".txt"]
+    original_ext = os.path.splitext(file.filename or "")[1].lower()
+    
+    if content_type in allowed_docs or original_ext in allowed_exts:
         raw = await file.read()
-        original_ext = os.path.splitext(file.filename or "")[1] or ".file"
+        if original_ext in allowed_exts:
+            # Set appropriate content_type for extensions
+            if original_ext == ".edi":
+                content_type = "application/edi"
+            elif original_ext == ".txt":
+                content_type = "text/plain"
         final_path = f"{base_path}{original_ext}"
         upload_bytes(final_path, raw, content_type)
 
