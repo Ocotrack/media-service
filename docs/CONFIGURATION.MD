@@ -1,24 +1,24 @@
-# 📦 Microservicio de Medios - Meximova
+# Microservicio de Medios - Meximova
 
 Este microservicio se encarga de la gestión, procesamiento y almacenamiento de evidencias (fotos, videos y archivos) para la plataforma Meximova.
 
 ---
 
-## 🚀 Detalles de Conexión
+## Detalles de Conexión
 
 El servicio está detrás de un proxy inverso Apache que gestiona la terminación SSL y redirige el tráfico internamente.
 
-| Parámetro | Valor |
-|-----------|-------|
-| **URL Base** | `https://media.meximova.com` |
-| **Protocolo** | HTTPS (Obligatorio) |
-| **Puerto Externo** | 443 |
-| **Servidor de Entrada (Proxy)** | 192.168.1.116 (Apache) |
+| Parámetro                         | Valor                                          |
+| --------------------------------- | ---------------------------------------------- |
+| **URL Base**                      | `https://media.meximova.com`                   |
+| **Protocolo**                     | HTTPS (Obligatorio)                            |
+| **Puerto Externo**                | 443                                            |
+| **Servidor de Entrada (Proxy)**   | 192.168.1.116 (Apache)                         |
 | **Servidor de Destino (Backend)** | 192.168.1.126 (FastAPI/Uvicorn en puerto 8002) |
 
 ---
 
-## 🛠 Configuración del Cliente
+## Configuración del Cliente
 
 > [!IMPORTANT]
 > Para evitar errores de cURL timeout (error 28), especialmente al subir archivos desde el servidor principal hacia el subdominio de medios, es necesario seguir estas pautas:
@@ -47,7 +47,7 @@ $response = Http::timeout(120)
 
 ---
 
-## 📂 Endpoints Disponibles
+## Endpoints Disponibles
 
 ### 1. Health Check
 
@@ -55,7 +55,7 @@ Verifica si el servicio y el proxy están respondiendo correctamente.
 
 - **Método**: `GET`
 - **Ruta**: `/health`
-- **Respuesta Exitosa**: 
+- **Respuesta Exitosa**:
   ```json
   {
     "status": "ok"
@@ -73,6 +73,7 @@ Verifica si el servicio y el proxy están respondiendo correctamente.
 - **Límite de Tamaño**: Sin límite estricto en el proxy (configurado con `LimitRequestBody 0`)
 
 **Tipos de Archivo Soportados**:
+
 - Imágenes: `image/*` (se comprime automáticamente a WebP/JPEG)
 - Videos: `video/*` (se comprime automáticamente a MP4)
 - Documentos: PDF, Excel (`.xlsx`, `.xls`)
@@ -100,20 +101,20 @@ Verifica si el servicio y el proxy están respondiendo correctamente.
 
 ---
 
-## ⚠️ Solución de Problemas Comunes
+## Solución de Problemas Comunes
 
-| Error | Causa Probable | Solución |
-|-------|----------------|----------|
-| **cURL error 28** | Timeout en el handshake SSL o DNS lento | Forzar IPv4 en el cliente y añadir el dominio al archivo `/etc/hosts` |
-| **405 Method Not Allowed** | Se intentó un método (ej. HEAD) no permitido | Asegúrese de usar `GET` para salud y `POST` para subidas |
-| **502 Bad Gateway** | El servicio en el .126 está caído | Revisar que Uvicorn esté corriendo en el puerto 8002 del servidor .126 |
-| **SSL Certificate Error** | Intento de conexión por IP en lugar de dominio | Use siempre el dominio `https://media.meximova.com` |
-| **401 Unauthorized** | API Key faltante o inválida | Verificar el header `X-Api-Key` |
-| **403 Forbidden** | Intento de acceder a recursos de otro cliente | Verificar que la ruta pertenezca al cliente autenticado |
+| Error                      | Causa Probable                                 | Solución                                                               |
+| -------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------- |
+| **cURL error 28**          | Timeout en el handshake SSL o DNS lento        | Forzar IPv4 en el cliente y añadir el dominio al archivo `/etc/hosts`  |
+| **405 Method Not Allowed** | Se intentó un método (ej. HEAD) no permitido   | Asegúrese de usar `GET` para salud y `POST` para subidas               |
+| **502 Bad Gateway**        | El servicio en el .126 está caído              | Revisar que Uvicorn esté corriendo en el puerto 8002 del servidor .126 |
+| **SSL Certificate Error**  | Intento de conexión por IP en lugar de dominio | Use siempre el dominio `https://media.meximova.com`                    |
+| **401 Unauthorized**       | API Key faltante o inválida                    | Verificar el header `X-Api-Key`                                        |
+| **403 Forbidden**          | Intento de acceder a recursos de otro cliente  | Verificar que la ruta pertenezca al cliente autenticado                |
 
 ---
 
-## 📝 Notas de Infraestructura
+## Notas de Infraestructura
 
 - **SSL**: Certificado Let's Encrypt (E7)
 - **Handshake**: Soporta TLS v1.2 y v1.3
@@ -123,7 +124,7 @@ Verifica si el servicio y el proxy están respondiendo correctamente.
 
 ---
 
-## 🔧 Variables de Entorno Requeridas
+## Variables de Entorno Requeridas
 
 ```env
 # MinIO Configuration
@@ -142,7 +143,7 @@ MEDIA_URL_TTL_SECONDS=3600
 
 ---
 
-## 📊 Monitoreo
+## Monitoreo
 
 Para verificar el estado del servicio:
 
