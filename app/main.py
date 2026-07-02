@@ -27,10 +27,17 @@ from .config import (
     MAX_CONCURRENT_JOBS,
     MEDIA_URL_TTL_SECONDS,
 )
-from .models import MediaItem, ProcessingResponse, WebhookPayload
+from .models import (
+    MediaItem, 
+    ProcessingResponse, 
+    WebhookPayload, 
+    UrlResponse, 
+    DeleteResponse
+)
 from .storage import (
     delete_file,
     generate_presigned_url,
+    generate_public_url,
     get_object_stream,
     upload_bytes,
     upload_file,
@@ -365,26 +372,38 @@ async def upload_media(
 
 @app.get(
     "/media/url",
-    summary="Generate a presigned URL for private file access",
+    summary="Generate a URL for file access",
     tags=["Media"],
+    response_model=UrlResponse,
 )
 async def generate_media_url(
     path: str = Query(..., description="S3 object key (path) of the media file"),
+    public: bool = Query(
+        False, 
+        description="If true, returns a static URL without signatures (perfect for CDNs). Requires the S3 bucket/folder to be public."
+    ),
     client_id: str = Depends(get_client_id),
 ):
     """
-    Generate a time-limited presigned URL for direct access to a private file.
-    TTL is controlled by MEDIA_URL_TTL_SECONDS (.env).
+    Generate a URL for direct access to a file.
+    If 'public' is False (default), generates a time-limited presigned URL.
+    If 'public' is True, generates a clean cacheable URL.
     """
     validate_path_ownership(path, client_id)
-    url = generate_presigned_url(path)
-    return {"url": url, "expires_in": MEDIA_URL_TTL_SECONDS}
+    
+    if public:
+        url = generate_public_url(path)
+        return {"url": url, "type": "public", "expires_in": None}
+    else:
+        url = generate_presigned_url(path)
+        return {"url": url, "type": "presigned", "expires_in": MEDIA_URL_TTL_SECONDS}
 
 
 @app.delete(
     "/media",
     summary="Delete a media file",
     tags=["Media"],
+    response_model=DeleteResponse,
 )
 async def delete_media(
     path: str = Query(..., description="S3 object key (path) of the file to delete"),

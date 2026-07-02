@@ -31,3 +31,16 @@ class WebhookPayload(BaseModel):
     error: Optional[str] = None
     client_id: str
     folder: str
+
+
+class UrlResponse(BaseModel):
+    """Returned when requesting a URL for media access."""
+    url: str
+    type: str
+    expires_in: Optional[int] = None
+
+
+class DeleteResponse(BaseModel):
+    """Returned upon successful deletion of a media file."""
+    detail: str
+    path: str

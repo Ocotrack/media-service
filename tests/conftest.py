@@ -71,6 +71,10 @@ async def client():
             return_value="http://localhost:9000/media/signed-url?token=abc",
         ),
         patch(
+            f"{STORAGE_MODULE}.generate_public_url",
+            return_value="http://localhost:9000/media/public-url",
+        ),
+        patch(
             f"{STORAGE_MODULE}.get_object_stream",
             return_value=io.BytesIO(b"binary-content"),
         ),

@@ -46,13 +46,17 @@ def upload_file(local_path: str, s3_key: str, content_type: str) -> None:
     """
     Upload a local file on disk to S3 using a streaming multipart upload.
     Operates on file paths to keep memory usage constant regardless of file size.
+    Injects Cache-Control so the CDN (Cloudflare) caches the file efficiently.
     """
     try:
         s3_client.upload_file(
             Filename=local_path,
             Bucket=AWS_BUCKET_NAME,
             Key=s3_key,
-            ExtraArgs={"ContentType": content_type},
+            ExtraArgs={
+                "ContentType": content_type,
+                "CacheControl": "public, max-age=31536000, immutable",
+            },
         )
     except botocore.exceptions.ClientError as e:
         logger.error("S3 upload failed for key '%s': %s", s3_key, e)
@@ -64,6 +68,7 @@ def upload_file(local_path: str, s3_key: str, content_type: str) -> None:
 def upload_bytes(s3_key: str, data: bytes, content_type: str) -> None:
     """
     Upload raw bytes to S3. Used for small files (e.g. compressed images in memory).
+    Injects Cache-Control so the CDN (Cloudflare) caches the file efficiently.
     """
     try:
         s3_client.put_object(
@@ -71,6 +76,7 @@ def upload_bytes(s3_key: str, data: bytes, content_type: str) -> None:
             Key=s3_key,
             Body=io.BytesIO(data),
             ContentType=content_type,
+            CacheControl="public, max-age=31536000, immutable",
         )
     except botocore.exceptions.ClientError as e:
         logger.error("S3 put_object failed for key '%s': %s", s3_key, e)
@@ -102,7 +108,6 @@ def generate_presigned_url(s3_key: str) -> str:
     for the public-facing domain (avoiding SignatureDoesNotMatch errors).
     """
     try:
-        # Create a temporary client pointing to the public URL for correct signing
         endpoint = AWS_PUBLIC_URL if AWS_PUBLIC_URL else AWS_ENDPOINT_URL
         public_client = boto3.client(
             "s3",
@@ -124,6 +129,16 @@ def generate_presigned_url(s3_key: str) -> str:
         raise HTTPException(
             status_code=500, detail="Failed to generate signed URL"
         ) from e
+
+
+def generate_public_url(s3_key: str) -> str:
+    """
+    Generate a clean, static, cacheable public URL without any AWS signatures.
+    Requires the underlying S3 bucket (or prefix) to have a Public Read policy.
+    """
+    base_url = AWS_PUBLIC_URL.rstrip("/") if AWS_PUBLIC_URL else AWS_ENDPOINT_URL.rstrip("/")
+    # In MinIO/S3 path-style, the bucket name is part of the URL path
+    return f"{base_url}/{AWS_BUCKET_NAME}/{s3_key}"
 
 
 def get_object_stream(s3_key: str):

@@ -11,17 +11,23 @@ FOREIGN_PATH = "other_client/uploads/some-uuid.webp"
 
 @pytest.mark.asyncio
 async def test_generate_url_returns_signed_url(client):
-    response = await client.get(
-        "/media/url",
-        headers=VALID_HEADERS,
-        params={"path": OWNED_PATH},
-    )
+    response = await client.get("/media/url?path=local_test/my-image.jpg", headers=VALID_HEADERS)
     assert response.status_code == 200
-    body = response.json()
-    assert "url" in body
-    assert body["url"].startswith("http")
-    assert "expires_in" in body
-    assert isinstance(body["expires_in"], int)
+    data = response.json()
+    assert "url" in data
+    assert "signed-url" in data["url"]
+    assert data["type"] == "presigned"
+    assert data["expires_in"] == 3600
+
+@pytest.mark.asyncio
+async def test_generate_url_returns_public_url(client):
+    response = await client.get("/media/url?path=local_test/public-image.jpg&public=true", headers=VALID_HEADERS)
+    assert response.status_code == 200
+    data = response.json()
+    assert "url" in data
+    assert "public-url" in data["url"]
+    assert data["type"] == "public"
+    assert data["expires_in"] is None
 
 
 @pytest.mark.asyncio
