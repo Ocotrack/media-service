@@ -40,6 +40,48 @@ def _make_client():
 s3_client = _make_client()
 
 
+import json
+
+def init_storage():
+    """
+    Ensure the target S3 bucket exists and apply a public read policy automatically.
+    This makes the project plug-and-play without requiring users to manually configure MinIO.
+    """
+    try:
+        # Check if bucket exists, create if it doesn't
+        try:
+            s3_client.head_bucket(Bucket=AWS_BUCKET_NAME)
+            logger.info("Bucket '%s' already exists.", AWS_BUCKET_NAME)
+        except botocore.exceptions.ClientError as e:
+            if e.response['Error']['Code'] == '404':
+                logger.info("Bucket '%s' not found. Creating it...", AWS_BUCKET_NAME)
+                s3_client.create_bucket(Bucket=AWS_BUCKET_NAME)
+            else:
+                raise
+
+        # Apply a hybrid public read policy: only files inside any /public/ folder are accessible
+        # This keeps documents safe while allowing CDNs to cache public images.
+        policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": "*",
+                    "Action": ["s3:GetObject"],
+                    "Resource": [f"arn:aws:s3:::{AWS_BUCKET_NAME}/*/public/*"]
+                }
+            ]
+        }
+        s3_client.put_bucket_policy(
+            Bucket=AWS_BUCKET_NAME,
+            Policy=json.dumps(policy)
+        )
+        logger.info("Public read policy applied to bucket '%s'.", AWS_BUCKET_NAME)
+
+    except Exception as e:
+        logger.warning("Could not auto-configure bucket '%s': %s", AWS_BUCKET_NAME, e)
+
+
 # ================== Storage Operations ==================
 
 def upload_file(local_path: str, s3_key: str, content_type: str) -> None:

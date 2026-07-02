@@ -41,6 +41,7 @@ from .storage import (
     get_object_stream,
     upload_bytes,
     upload_file,
+    init_storage,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,11 @@ async def lifespan(app: FastAPI):
     """Initialize shared application resources on startup."""
     global video_semaphore
     video_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
+    
+    # Auto-configure MinIO/S3 (Create bucket and apply public policy)
+    # Run in a background thread to prevent blocking the async event loop
+    await asyncio.to_thread(init_storage)
+    
     logger.info(
         "Media Service started. Max concurrent video jobs: %d", MAX_CONCURRENT_JOBS
     )
