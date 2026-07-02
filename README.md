@@ -16,10 +16,13 @@ A self-hosted, S3-compatible microservice for **uploading, compressing, and mana
 - **Webhook Callbacks** — Notifies your backend via HTTP POST when video processing is complete
 - **Concurrency Control** — `asyncio.Semaphore` limits parallel FFmpeg jobs to protect server resources
 - **Disk Streaming** — Reads uploads in 1MB chunks to disk; RAM stays flat regardless of file size
-- **Universal S3 Support** — Works with AWS S3, MinIO, Cloudflare R2, DigitalOcean Spaces, and any S3-compatible provider
-- **Multi-Tenant API Keys** — Simple `X-Api-Key` authentication with client-isolated storage paths
-- **Presigned URLs** — Time-limited direct access links for private files (TTL configurable)
-- **Document Storage** — Stores PDFs, DOCX, XLSX, XML, and other document types as-is
+- **Hybrid Public/Private Access** — Host static CDN assets and secure private documents in the same bucket using folder prefixes (e.g. `X-Folder: public`).
+- **CDN Edge Caching** — Injects `Cache-Control: immutable` headers automatically to perfectly leverage CDNs like Cloudflare.
+- **Auto-Initialization** — Plug-and-play: creates the S3 bucket and applies the hybrid security policy automatically on startup.
+- **Universal S3 Support** — Works with AWS S3, MinIO, Cloudflare R2, DigitalOcean Spaces, and any S3-compatible provider.
+- **Multi-Tenant API Keys** — Simple `X-Api-Key` authentication with client-isolated storage paths.
+- **Presigned URLs** — Time-limited direct access links for private files (TTL configurable).
+- **Document Storage** — Stores PDFs, DOCX, XLSX, XML, and other document types as-is.
 
 ---
 
@@ -128,11 +131,34 @@ All endpoints (except `/health`) require the `X-Api-Key` header.
 }
 ```
 
-### `GET /media/url` — Generate presigned URL
+### `GET /media/url` — Generate access URL
 
 ```
-GET /media/url?path=my_app/uploads/uuid.webp
+GET /media/url?path=my_app/uploads/uuid.webp&public=false
 X-Api-Key: mysecretkey
+```
+
+| Query Param | Required | Description |
+| ----------- | -------- | ----------- |
+| `path` | ✅ | S3 object key (path) of the media file |
+| `public` | ❌ | Set to `true` to return a static, cacheable URL (without AWS signatures). Requires the file to be inside a `/public/` folder. Default is `false` (returns a secure presigned URL). |
+
+**Presigned (Private) Response**:
+```json
+{
+  "url": "https://media.yourdomain.com/my_app/uploads/uuid.webp?X-Amz-Signature=...",
+  "type": "presigned",
+  "expires_in": 3600
+}
+```
+
+**Public (CDN) Response**:
+```json
+{
+  "url": "https://cdn.yourdomain.com/my_app/public/uuid.webp",
+  "type": "public",
+  "expires_in": null
+}
 ```
 
 ### `DELETE /media` — Delete a file
@@ -220,19 +246,13 @@ AWS_PUBLIC_URL=https://cdn.yourdomain.com
 
 The service will automatically replace the internal S3 host in all generated URLs.
 
-### Bucket setup
+### Infrastructure Auto-Initialization
 
-Create the bucket before starting the service. With MinIO:
+The media-service is **Plug & Play**. When the FastAPI application starts, it connects to your S3/MinIO provider and automatically:
+1. Creates the target bucket (e.g., `media`) if it does not exist.
+2. Injects a hybrid JSON Bucket Policy that allows **public read access only to files located inside any `/public/` folder** (`arn:aws:s3:::media/*/public/*`).
 
-```bash
-docker exec <minio-container> mc alias set local http://localhost:9000 <user> <password>
-docker exec <minio-container> mc mb local/<bucket-name>
-```
-
-With AWS CLI:
-```bash
-aws s3 mb s3://<bucket-name>
-```
+All other paths remain strictly private. This eliminates manual configuration and makes the project instantly ready for production CDN scaling.
 
 ---
 
