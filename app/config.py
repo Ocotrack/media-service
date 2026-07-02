@@ -2,42 +2,29 @@ import os
 import logging
 from datetime import timedelta
 from dotenv import load_dotenv
-from minio import Minio
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# ================== MinIO ==================
-MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
-MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
-MINIO_BUCKET = os.getenv("MINIO_BUCKET", "media")
-MINIO_SECURE = os.getenv("MINIO_USE_SSL", "false").lower() in ("1", "true", "yes")
+# ================== S3 / boto3 ==================
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+AWS_ENDPOINT_URL = os.getenv("AWS_ENDPOINT_URL")# Optional: for MinIO / R2
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME", "media")
+AWS_PUBLIC_URL = os.getenv("AWS_PUBLIC_URL", "")# Optional: for CDN / public endpoint URL generation
 
-# Endpoint interno de Docker para uploads/downloads
-MINIO_ENDPOINT_INTERNAL = os.getenv("MINIO_ENDPOINT_INTERNAL", "minio:9003")
-minio_internal = Minio(
-    endpoint=MINIO_ENDPOINT_INTERNAL,
-    access_key=MINIO_ACCESS_KEY,
-    secret_key=MINIO_SECRET_KEY,
-    secure=MINIO_SECURE
-)
-
-MINIO_PUBLIC_USE_SSL = os.getenv("MINIO_PUBLIC_USE_SSL", "false").lower() in ("1", "true", "yes")
-CDN_HOST = os.getenv("MINIO_ENDPOINT_PUBLIC") or os.getenv("CDN_HOST", "localhost:9003")
-minio_public = Minio(
-    endpoint=CDN_HOST,
-    access_key=MINIO_ACCESS_KEY,
-    secret_key=MINIO_SECRET_KEY,
-    secure=MINIO_PUBLIC_USE_SSL,  # Use the new SSL config for public URLs
-    region=os.getenv("MINIO_REGION", "us-east-1"),
-)
-
-if not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
-    logger.warning("MINIO_ACCESS_KEY o MINIO_SECRET_KEY no están definidos.")
+if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY:
+    logger.warning(
+        "AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY are not set. "
+        "Storage operations will fail."
+    )
 
 # ================== API Keys ==================
+# Format: "key1:client_a,key2:client_b"
 RAW_API_KEYS = os.getenv("API_KEYS", "")
-API_KEYS_MAP = {}
+API_KEYS_MAP: dict[str, str] = {}
+
 if RAW_API_KEYS:
     for pair in RAW_API_KEYS.split(","):
         pair = pair.strip()
@@ -53,8 +40,29 @@ if RAW_API_KEYS:
             continue
 
 if not API_KEYS_MAP:
-    logger.warning("No API keys configured. Set API_KEYS in .env for production.")
+    logger.warning(
+        "No API keys configured. Set API_KEYS=key1:client_a,key2:client_b in .env."
+    )
 
 # ================== Signed URL TTL ==================
-MEDIA_URL_TTL_SECONDS = int(os.getenv("MEDIA_URL_TTL_SECONDS", "300"))
-MEDIA_URL_EXPIRES = timedelta(seconds=MEDIA_URL_TTL_SECONDS)
+MEDIA_URL_TTL_SECONDS = int(os.getenv("MEDIA_URL_TTL_SECONDS", "3600"))
+
+# ================== Concurrency ==================
+# Max parallel FFmpeg compression jobs.
+# Default is 2 for small servers. Increase for dedicated media servers.
+MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "2"))
+
+# ================== Media Processing ==================
+# Image compression: max side in pixels before resizing
+IMAGE_MAX_DIMENSION = int(os.getenv("IMAGE_MAX_DIMENSION", "1280"))
+# Image compression quality (1-100), lower = smaller file
+IMAGE_QUALITY = int(os.getenv("IMAGE_QUALITY", "75"))
+
+# ================== Allowed Document Extensions ==================
+# Comma-separated list of allowed non-image/video extensions
+_raw_extensions = os.getenv("ALLOWED_EXTENSIONS", "pdf,xlsx,xls,docx,txt,xml")
+ALLOWED_EXTENSIONS: set[str] = {
+    ext.strip().lower().lstrip(".")
+    for ext in _raw_extensions.split(",")
+    if ext.strip()
+}

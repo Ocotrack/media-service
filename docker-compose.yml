@@ -1,41 +1,42 @@
 services:
+
+  # ============================================================
+  # MinIO - S3-Compatible Object Storage (optional for local dev)
+  # For production, you can replace this with AWS S3 or Cloudflare R2
+  # by simply changing the AWS_* variables in .env.
+  # ============================================================
   minio:
     image: minio/minio:latest
-    container_name: minio
+    container_name: media-service-minio
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
-      MINIO_DOMAIN: cdn.meximova.com # Permite que MinIO acepte peticiones del CDN público
-    command: server /data --address ":9003" --console-address ":9004"
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY}
+    command: server /data --address ":9000" --console-address ":9001"
     volumes:
       - minio_data:/data
     ports:
-      - "9003:9003" # API S3
-      - "9004:9004" # Consola MinIO
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # MinIO Console UI
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      retries: 5
 
+  # ============================================================
+  # Media Service - FastAPI Application
+  # ============================================================
   media-service:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: media-service
     depends_on:
-      - minio
-    environment:
-      MINIO_ENDPOINT_INTERNAL: ${MINIO_ENDPOINT_INTERNAL}
-      MINIO_ENDPOINT_PUBLIC: ${MINIO_ENDPOINT_PUBLIC}
-      MINIO_REGION: ${MINIO_REGION}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
-      MINIO_USE_SSL: ${MINIO_USE_SSL}
-      MINIO_PUBLIC_USE_SSL: ${MINIO_PUBLIC_USE_SSL}
-      MINIO_BUCKET: ${MINIO_BUCKET}
-      MEDIA_URL_TTL_SECONDS: ${MEDIA_URL_TTL_SECONDS}
-      API_KEYS: ${API_KEYS}
-      PORT: ${PORT}
-      ENV: ${ENV}
+      minio:
+        condition: service_healthy
+    env_file: .env
     ports:
-      - "8002:8002"
+      - "${PORT:-8002}:8002"
     restart: unless-stopped
 
 volumes:

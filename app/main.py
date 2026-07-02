@@ -1,286 +1,423 @@
-import io
-import uuid
+import asyncio
+import logging
 import os
+import uuid
+from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Header, Depends, Query, Request
+import httpx
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import StreamingResponse
-
-# Importante: Middleware para manejar headers de proxy (HTTPS)
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from .config import API_KEYS_MAP, MEDIA_URL_TTL_SECONDS
-from .models import MediaItem
-from .storage import (
-    upload_bytes,
-    delete_object,
-    generate_signed_url,
-    get_object_stream,
+from .compression import compress_image, compress_video_async
+from .config import (
+    ALLOWED_EXTENSIONS,
+    API_KEYS_MAP,
+    MAX_CONCURRENT_JOBS,
+    MEDIA_URL_TTL_SECONDS,
 )
-from .compression import compress_image_aggressive, compress_video_ffmpeg
+from .models import MediaItem, ProcessingResponse, WebhookPayload
+from .storage import (
+    delete_file,
+    generate_presigned_url,
+    get_object_stream,
+    upload_bytes,
+    upload_file,
+)
+
+logger = logging.getLogger(__name__)
+
+# ============================================================
+# Concurrency Semaphore (lives for the application lifetime)
+# ============================================================
+# Controls the max number of parallel FFmpeg processes.
+# Set MAX_CONCURRENT_JOBS in .env (default: 2).
+video_semaphore: asyncio.Semaphore
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize shared application resources on startup."""
+    global video_semaphore
+    video_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
+    logger.info(
+        "Media Service started. Max concurrent video jobs: %d", MAX_CONCURRENT_JOBS
+    )
+    yield
+    logger.info("Media Service shutting down.")
+
+
+# ============================================================
+# Application
+# ============================================================
 
 app = FastAPI(
-    title="Media Storage Service",
+    title="Media Service",
     description=(
-        "Module of Meximova Transportes for managing media files.\n"
+        "A self-hosted, S3-compatible microservice for uploading, compressing, "
+        "and managing media files (images, videos, and documents). "
+        "Supports AWS S3, MinIO, Cloudflare R2, and any S3-compatible provider."
     ),
     version="2.0.0",
+    lifespan=lifespan,
 )
 
-# Trust Proxy Headers (for SSL termination)
+# Trust reverse-proxy headers (X-Forwarded-For, X-Forwarded-Proto)
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
-# ========== Health Check ==========
 
-@app.get("/health")
+# ============================================================
+# Constants
+# ============================================================
+CHUNK_SIZE = 1024 * 1024  # 1 MB read chunks for streaming uploads to disk
+
+
+# ============================================================
+# Health Check
+# ============================================================
+
+@app.get("/health", tags=["System"])
 async def health():
-    return {"status": "ok"}
+    """Liveness check. Returns 200 OK if the service is running."""
+    return {"status": "ok", "max_concurrent_jobs": MAX_CONCURRENT_JOBS}
 
-# ========== Helpers ==========
+
+# ============================================================
+# Dependency Helpers
+# ============================================================
 
 def sanitize_folder(folder: str) -> str:
     folder = folder.strip().strip("/")
     if not folder:
         return ""
     if ".." in folder:
-        raise HTTPException(status_code=400, detail="Invalid folder name")
-    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_/"
-    if any(ch not in allowed for ch in folder):
-        raise HTTPException(status_code=400, detail="Invalid characters in folder")
+        raise HTTPException(status_code=400, detail="Invalid folder: '..' is not allowed")
+    allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_/")
+    if any(ch not in allowed_chars for ch in folder):
+        raise HTTPException(status_code=400, detail="Folder contains invalid characters")
     return folder
 
-async def get_folder(x_folder: Optional[str] = Header(None, alias="X-Folder")) -> str:
-    if not x_folder:
-        return ""
-    return sanitize_folder(x_folder)
 
-async def get_client_id(x_api_key: Optional[str] = Header(None, alias="X-Api-Key")) -> str:
+async def get_folder(
+    x_folder: Optional[str] = Header(None, alias="X-Folder"),
+) -> str:
+    return sanitize_folder(x_folder) if x_folder else ""
+
+
+async def get_client_id(
+    x_api_key: Optional[str] = Header(None, alias="X-Api-Key"),
+) -> str:
     if not x_api_key:
-        raise HTTPException(status_code=401, detail="X-Api-Key required")
+        raise HTTPException(status_code=401, detail="X-Api-Key header is required")
     client_id = API_KEYS_MAP.get(x_api_key)
     if not client_id:
         raise HTTPException(status_code=403, detail="Invalid or unauthorized API Key")
     return client_id
 
-def build_base_path(client_id: str, folder: str, media_id: str) -> str:
+
+def build_s3_key(client_id: str, folder: str, media_id: str, ext: str) -> str:
+    """Construct the S3 object key: {client_id}/{folder?}/{media_id}.{ext}"""
     parts = [client_id]
     if folder:
         parts.append(folder)
-    parts.append(media_id)
+    parts.append(f"{media_id}.{ext}")
     return "/".join(parts)
 
-def validate_path_ownership(path: str, client_id: str):
+
+def validate_path_ownership(path: str, client_id: str) -> None:
     """
-    Ensure the path belongs to the client_id.
-    Path format expected: {client_id}/...
+    Ensure a given S3 path starts with the authenticated client's ID prefix.
+    Prevents clients from accessing or mutating each other's data.
     """
     parts = path.split("/")
     if not parts or parts[0] != client_id:
-        raise HTTPException(status_code=403, detail="Unauthorized for this path")
+        raise HTTPException(
+            status_code=403, detail="You are not authorized to access this resource"
+        )
 
-# ========== Endpoints ==========
 
-@app.post("/media", response_model=MediaItem, summary="Upload media", description="Uploads a file to storage. Accepted files: images, videos, PDF, Excel, XML, EDI, TXT.")
+# ============================================================
+# Disk Streaming Helper
+# ============================================================
+
+async def stream_upload_to_disk(file: UploadFile, dest_path: str) -> None:
+    """
+    Read an UploadFile in 1MB chunks and write it directly to dest_path on disk.
+    This keeps RAM usage constant regardless of the uploaded file size.
+    """
+    with open(dest_path, "wb") as out:
+        while True:
+            chunk = await file.read(CHUNK_SIZE)
+            if not chunk:
+                break
+            out.write(chunk)
+
+
+# ============================================================
+# Background Task: Video Processing
+# ============================================================
+
+async def _process_video_background(
+    tmp_raw_path: str,
+    s3_key: str,
+    media_id: str,
+    client_id: str,
+    folder: str,
+    webhook_url: Optional[str],
+):
+    """
+    Background task for video processing:
+      1. Acquire the concurrency semaphore (throttles parallel FFmpeg jobs).
+      2. Compress video with FFmpeg (async subprocess, non-blocking).
+      3. Upload compressed file to S3.
+      4. Clean up all temporary disk files.
+      5. Dispatch HTTP webhook callback (if webhook_url is provided).
+    """
+    tmp_compressed_path = f"{tmp_raw_path}.mp4"
+    status = "failed"
+    error_message: Optional[str] = None
+    final_url: Optional[str] = None
+
+    try:
+        async with video_semaphore:
+            logger.info("[video] Acquired semaphore for %s", media_id)
+            await compress_video_async(tmp_raw_path, tmp_compressed_path)
+
+        upload_file(tmp_compressed_path, s3_key, "video/mp4")
+        final_url = generate_presigned_url(s3_key)
+        status = "ready"
+        logger.info("[video] Successfully processed and uploaded %s -> %s", media_id, s3_key)
+
+    except Exception as exc:
+        error_message = str(exc)
+        logger.error("[video] Processing failed for %s: %s", media_id, exc)
+
+    finally:
+        # Always clean up temp files regardless of success or failure
+        for path in (tmp_raw_path, tmp_compressed_path):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError as e:
+                logger.warning("[video] Could not remove temp file %s: %s", path, e)
+
+    # Dispatch webhook notification
+    if webhook_url:
+        payload = WebhookPayload(
+            id=media_id,
+            status=status,
+            path=s3_key if status == "ready" else None,
+            url=final_url,
+            error=error_message,
+            client_id=client_id,
+            folder=folder,
+        )
+        await _dispatch_webhook(webhook_url, payload)
+
+
+async def _dispatch_webhook(webhook_url: str, payload: WebhookPayload) -> None:
+    """Send the processing result as a POST request to the client's webhook URL."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                webhook_url,
+                json=payload.model_dump(),
+                headers={"Content-Type": "application/json"},
+            )
+            logger.info(
+                "[webhook] Dispatched to %s — HTTP %d", webhook_url, response.status_code
+            )
+    except httpx.RequestError as e:
+        logger.error("[webhook] Failed to deliver to %s: %s", webhook_url, e)
+
+
+# ============================================================
+# Endpoints
+# ============================================================
+
+@app.post(
+    "/media",
+    summary="Upload a media file",
+    description=(
+        "Upload an image, video, or document. "
+        "Images are compressed synchronously to WebP. "
+        "Videos are compressed asynchronously (HTTP 202 is returned immediately). "
+        "Optionally provide a `webhook_url` to receive a callback when video processing completes."
+    ),
+    tags=["Media"],
+    responses={
+        200: {"description": "File uploaded and processed successfully (images/documents)"},
+        202: {"description": "Video accepted; processing in background"},
+    },
+)
 async def upload_media(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     client_id: str = Depends(get_client_id),
     folder: str = Depends(get_folder),
+    webhook_url: Optional[str] = Query(
+        default=None,
+        description="Optional URL to receive a POST callback when video processing finishes.",
+    ),
 ):
-    content_type = file.content_type or ""
+    content_type = (file.content_type or "").lower()
+    original_filename = file.filename or "upload"
+    original_ext = os.path.splitext(original_filename)[1].lower().lstrip(".")
     media_id = str(uuid.uuid4())
-    base_path = build_base_path(client_id, folder, media_id)
 
-    # Image Processing (Sync)
+    # ---- Image: process synchronously in memory ----
     if content_type.startswith("image/"):
         raw = await file.read()
-        # Compress
-        compressed, new_type, ext = compress_image_aggressive(raw)
-        final_path = f"{base_path}.{ext}"
-        upload_bytes(final_path, compressed, new_type)
+        compressed, final_type, ext = compress_image(raw)
+        s3_key = build_s3_key(client_id, folder, media_id, ext)
+        upload_bytes(s3_key, compressed, final_type)
 
         return MediaItem(
             id=media_id,
-            filename=file.filename,
-            content_type=new_type,
-            path=final_path,
+            filename=original_filename,
+            content_type=final_type,
+            path=s3_key,
             client_id=client_id,
             folder=folder,
         )
 
-    # Video Processing (Sync - Warning: Heavy operation)
+    # ---- Video: stream to disk, process asynchronously ----
     if content_type.startswith("video/"):
-        import tempfile
-        
-        original_ext = os.path.splitext(file.filename or "")[1] or ".source"
-        
-        # Save uploaded file to temp
-        with tempfile.NamedTemporaryFile(delete=False, suffix=original_ext) as tmp_in:
-            tmp_in.write(await file.read())
-            tmp_in_path = tmp_in.name
-            
-        tmp_out_path = f"{tmp_in_path}.mp4"
-        
-        try:
-            # Compress using existing helper
-            out_path, new_type = compress_video_ffmpeg(tmp_in_path, tmp_out_path)
-            
-            with open(out_path, "rb") as f:
-                compressed_data = f.read()
-                
-            final_path = f"{base_path}.mp4"
-            upload_bytes(final_path, compressed_data, new_type)
-            
-            return MediaItem(
-                id=media_id,
-                filename=file.filename,
-                content_type=new_type,
-                path=final_path,
-                client_id=client_id,
-                folder=folder,
-            )
-        finally:
-            # Cleanup temp files
-            if os.path.exists(tmp_in_path):
-                os.remove(tmp_in_path)
-            if os.path.exists(tmp_out_path):
-                os.remove(tmp_out_path)
+        tmp_raw_path = f"/tmp/{media_id}.{original_ext or 'raw'}"
+        s3_key = build_s3_key(client_id, folder, media_id, "mp4")
 
-    # Documents (PDF, Excel, XML, EDI, TXT, etc)
-    allowed_docs = [
-        "application/pdf",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/vnd.ms-excel",
-        "application/xml",
-        "text/xml",
-        "text/plain",
-        "application/edi"
-    ]
-    allowed_exts = [".edi", ".txt"]
-    original_ext = os.path.splitext(file.filename or "")[1].lower()
-    
-    if content_type in allowed_docs or original_ext in allowed_exts:
-        raw = await file.read()
-        if original_ext in allowed_exts:
-            # Set appropriate content_type for extensions
-            if original_ext == ".edi":
-                content_type = "application/edi"
-            elif original_ext == ".txt":
-                content_type = "text/plain"
-        final_path = f"{base_path}{original_ext}"
-        upload_bytes(final_path, raw, content_type)
+        await stream_upload_to_disk(file, tmp_raw_path)
 
-        return MediaItem(
+        background_tasks.add_task(
+            _process_video_background,
+            tmp_raw_path=tmp_raw_path,
+            s3_key=s3_key,
+            media_id=media_id,
+            client_id=client_id,
+            folder=folder,
+            webhook_url=webhook_url,
+        )
+
+        return ProcessingResponse(
             id=media_id,
-            filename=file.filename,
-            content_type=content_type,
-            path=final_path,
+            status="processing",
+            message="Video accepted. It will be compressed and uploaded in the background.",
+            filename=original_filename,
             client_id=client_id,
             folder=folder,
         )
 
-    raise HTTPException(status_code=400, detail="Only image/*, video/*, PDF, Excel, XML, or text files are allowed")
+    # ---- Documents: store as-is (configurable extensions) ----
+    is_allowed_doc = (
+        content_type
+        in {
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/xml",
+            "text/xml",
+            "text/plain",
+        }
+        or original_ext in ALLOWED_EXTENSIONS
+    )
+
+    if is_allowed_doc:
+        ext = original_ext or "bin"
+        s3_key = build_s3_key(client_id, folder, media_id, ext)
+        tmp_path = f"/tmp/{media_id}.{ext}"
+
+        try:
+            await stream_upload_to_disk(file, tmp_path)
+            upload_file(tmp_path, s3_key, content_type or "application/octet-stream")
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+        return MediaItem(
+            id=media_id,
+            filename=original_filename,
+            content_type=content_type or "application/octet-stream",
+            path=s3_key,
+            client_id=client_id,
+            folder=folder,
+        )
+
+    raise HTTPException(
+        status_code=415,
+        detail=(
+            f"Unsupported media type '{content_type}' or extension '.{original_ext}'. "
+            f"Accepted: image/*, video/*, and extensions: {', '.join(sorted(ALLOWED_EXTENSIONS))}."
+        ),
+    )
 
 
-@app.get("/media/url", summary="Generate signed URL for media access")
+@app.get(
+    "/media/url",
+    summary="Generate a presigned URL for private file access",
+    tags=["Media"],
+)
 async def generate_media_url(
-    path: str = Query(...),
+    path: str = Query(..., description="S3 object key (path) of the media file"),
     client_id: str = Depends(get_client_id),
 ):
+    """
+    Generate a time-limited presigned URL for direct access to a private file.
+    TTL is controlled by MEDIA_URL_TTL_SECONDS (.env).
+    """
     validate_path_ownership(path, client_id)
-    
-    # We don't check existence strictly to be faster/simpler, 
-    # OR we can assume if client has path, it exists.
-    # If strictly needed, we could head_object, but signed url generation doesn't require it.
-    
-    url = generate_signed_url(path)
+    url = generate_presigned_url(path)
     return {"url": url, "expires_in": MEDIA_URL_TTL_SECONDS}
 
 
-@app.put("/media", response_model=MediaItem, summary="Update existing media by path")
-async def update_media(
-    path: str = Query(...),
-    file: UploadFile = File(...),
-    client_id: str = Depends(get_client_id),
-):
-    validate_path_ownership(path, client_id)
-    
-    # Extract folder/media_id from path if possible, but simplest is to overwrite
-    # logic here is tricky without DB. We assume replacing content at 'path' or similar.
-    # To keep consistency with "stateless", we essentially re-upload to a NEW path 
-    # or the SAME path if extension matches.
-    # Ideally, we should generate a NEW unique ID/path to avoid cache issues, 
-    # but the user might want to keep the same reference?
-    # Let's generate a NEW path and return it, as that's safer for "Update" (essentially Replace).
-    
-    # However, 'path' is the key. 
-    # If we want to replace the content OF the path, we must ensure extension matches or similar.
-    
-    # SIMPLIFIED STRATEGY: Treat update as "Upload new, Delete old" 
-    # BUT since we're stateless, we just Upload New and return it. 
-    # The client can delete the old one if they want.
-    # OR if the client insists on "same path", we overwrite.
-    
-    # Let's overwrite IF extension allows, otherwise new path.
-    
-    # Re-using upload logic mostly
-    content_type = file.content_type or ""
-    # We try to preserve the base path structure
-    base_path_without_ext = path.rsplit(".", 1)[0]
-    
-    # Images
-    if content_type.startswith("image/"):
-        raw = await file.read()
-        compressed, new_type, ext = compress_image_aggressive(raw)
-        final_path = f"{base_path_without_ext}.{ext}"
-        
-        # If final_path differs from input path (e.g. png -> webp), we should probably delete the old one
-        if final_path != path:
-            delete_object(path)
-            
-        upload_bytes(final_path, compressed, new_type)
-        
-        return MediaItem(
-            id="unknown", # We don't parse ID from path easily without regex, keeping it simple
-            filename=file.filename,
-            content_type=new_type,
-            path=final_path,
-            client_id=client_id,
-            folder="", # Unknown without parsing
-        )
-
-    # ... For brevity and statelessness, "Update" is complex. 
-    # Let's implement a simple "Overwrite" logic that might change extension.
-    
-    raise HTTPException(status_code=501, detail="Update not fully implemented in stateless mode yet. Use Upload + Delete.")
-
-
-@app.delete("/media", summary="Delete media by path")
+@app.delete(
+    "/media",
+    summary="Delete a media file",
+    tags=["Media"],
+)
 async def delete_media(
-    path: str = Query(...),
+    path: str = Query(..., description="S3 object key (path) of the file to delete"),
     client_id: str = Depends(get_client_id),
 ):
+    """Permanently delete a media file from storage."""
     validate_path_ownership(path, client_id)
-    delete_object(path)
-    return {"detail": "Media deleted successfully"}
+    delete_file(path)
+    return {"detail": "Media deleted successfully", "path": path}
 
 
-@app.get("/media/download", summary="Download media content (stream)")
+@app.get(
+    "/media/download",
+    summary="Stream a media file for direct download",
+    tags=["Media"],
+)
 async def download_media(
-    path: str = Query(...),
+    path: str = Query(..., description="S3 object key (path) of the file to download"),
     client_id: str = Depends(get_client_id),
 ):
+    """
+    Stream file content directly from S3 as an HTTP response.
+    Useful for serving private files without exposing storage credentials.
+    """
     validate_path_ownership(path, client_id)
 
-    obj = get_object_stream(path)
-    if not obj:
-        raise HTTPException(status_code=404, detail="Media not found in storage")
+    stream = get_object_stream(path)
+    if stream is None:
+        raise HTTPException(status_code=404, detail="File not found in storage")
 
-    # MinIO stream response has headers
-    # We try to guess media type or default
-    media_type = "application/octet-stream" 
-    
+    filename = os.path.basename(path)
     return StreamingResponse(
-        obj,
-        media_type=media_type,
-        headers={"Content-Disposition": f'inline; filename="{os.path.basename(path)}"'},
+        stream,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
