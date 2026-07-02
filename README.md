@@ -179,6 +179,72 @@ X-Api-Key: mysecretkey
 
 ---
 
+## Production deployment
+
+### Reverse proxy (recommended)
+
+Run the service behind a reverse proxy that handles SSL termination. The service trusts `X-Forwarded-Proto` and `X-Forwarded-For` headers automatically.
+
+**Nginx:**
+```nginx
+server {
+    listen 443 ssl;
+    server_name media.yourdomain.com;
+
+    location / {
+        proxy_pass         http://localhost:8002;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Forwarded-For $remote_addr;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        client_max_body_size 0;  # no upload size limit
+    }
+}
+```
+
+**Caddy:**
+```
+media.yourdomain.com {
+    reverse_proxy localhost:8002
+}
+```
+
+**Traefik** — add standard labels to the `media-service` container in `docker-compose.yml`.
+
+### CDN / public URLs
+
+If you want presigned URLs to point to a CDN or a public domain instead of the raw S3 endpoint, set:
+
+```env
+AWS_PUBLIC_URL=https://cdn.yourdomain.com
+```
+
+The service will automatically replace the internal S3 host in all generated URLs.
+
+### Bucket setup
+
+Create the bucket before starting the service. With MinIO:
+
+```bash
+docker exec <minio-container> mc alias set local http://localhost:9000 <user> <password>
+docker exec <minio-container> mc mb local/<bucket-name>
+```
+
+With AWS CLI:
+```bash
+aws s3 mb s3://<bucket-name>
+```
+
+---
+
+## Running tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest tests/ -v
+```
+
+---
+
 ## Local development (without Docker)
 
 ```bash
@@ -186,12 +252,11 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Start a local MinIO instance separately, then:
 cp .env.example .env  # fill in values
 uvicorn app.main:app --reload --port 8002
 ```
 
-Interactive API docs available at: `http://localhost:8002/docs`
+Interactive API docs: `http://localhost:8002/docs`
 
 ---
 
