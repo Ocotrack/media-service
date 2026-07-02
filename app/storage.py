@@ -98,23 +98,26 @@ def delete_file(s3_key: str) -> None:
 def generate_presigned_url(s3_key: str) -> str:
     """
     Generate a time-limited presigned URL for direct file access.
-    If AWS_PUBLIC_URL is set, the URL host is replaced with the public CDN endpoint.
+    Uses a dedicated client with AWS_PUBLIC_URL so the AWS V4 Signature is valid
+    for the public-facing domain (avoiding SignatureDoesNotMatch errors).
     """
     try:
-        url: str = s3_client.generate_presigned_url(
+        # Create a temporary client pointing to the public URL for correct signing
+        endpoint = AWS_PUBLIC_URL if AWS_PUBLIC_URL else AWS_ENDPOINT_URL
+        public_client = boto3.client(
+            "s3",
+            region_name=AWS_REGION,
+            aws_access_key_id=AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+            endpoint_url=endpoint,
+            config=Config(signature_version="s3v4"),
+        )
+        
+        url: str = public_client.generate_presigned_url(
             ClientMethod="get_object",
             Params={"Bucket": AWS_BUCKET_NAME, "Key": s3_key},
             ExpiresIn=MEDIA_URL_TTL_SECONDS,
         )
-        if AWS_PUBLIC_URL:
-            # Swap internal endpoint host with the public-facing CDN host
-            import urllib.parse
-            parsed = urllib.parse.urlparse(url)
-            public_parsed = urllib.parse.urlparse(AWS_PUBLIC_URL)
-            url = url.replace(
-                f"{parsed.scheme}://{parsed.netloc}",
-                f"{public_parsed.scheme}://{public_parsed.netloc}",
-            )
         return url
     except botocore.exceptions.ClientError as e:
         logger.error("Presigned URL generation failed for key '%s': %s", s3_key, e)
