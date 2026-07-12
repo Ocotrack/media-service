@@ -1,5 +1,7 @@
 import io
+import json
 import logging
+
 import boto3
 import botocore
 from botocore.config import Config
@@ -7,23 +9,23 @@ from fastapi import HTTPException
 
 from .config import (
     AWS_ACCESS_KEY_ID,
-    AWS_SECRET_ACCESS_KEY,
+    AWS_BUCKET_NAME,
     AWS_ENDPOINT_URL,
     AWS_REGION,
-    AWS_BUCKET_NAME,
+    AWS_SECRET_ACCESS_KEY,
     MEDIA_URL_TTL_SECONDS,
-    AWS_PUBLIC_URL,
+    PRESIGN_ENDPOINT_URL,
+    UPLOAD_CACHE_CONTROL,
 )
 
 logger = logging.getLogger(__name__)
 
 # ================== S3 Client Factory ==================
 
-def _make_client():
+def _make_client(endpoint_url: str | None = None):
     """
-    Build a boto3 S3 client compatible with AWS S3, MinIO, Cloudflare R2,
-    DigitalOcean Spaces, and any S3-compatible provider.
-    Simply set AWS_ENDPOINT_URL for non-AWS providers.
+    Build a boto3 S3 client for storage operations.
+    endpoint_url overrides AWS_ENDPOINT_URL (used internally for MinIO/R2).
     """
     kwargs = dict(
         service_name="s3",
@@ -32,15 +34,22 @@ def _make_client():
         aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
         config=Config(signature_version="s3v4"),
     )
-    if AWS_ENDPOINT_URL:
-        kwargs["endpoint_url"] = AWS_ENDPOINT_URL
+    effective_url = endpoint_url or AWS_ENDPOINT_URL
+    if effective_url:
+        kwargs["endpoint_url"] = effective_url
     return boto3.client(**kwargs)
 
 
+# Internal client: connects to the real S3/MinIO endpoint for storage operations.
 s3_client = _make_client()
 
+# Presign client: uses PRESIGN_ENDPOINT_URL (public-facing domain) so that
+# generated URLs are valid for the browser to use directly.
+# Singleton — avoids creating a new TCP connection on every presign request.
+s3_presign_client = _make_client(endpoint_url=PRESIGN_ENDPOINT_URL)
 
-import json
+
+
 
 def init_storage():
     """
@@ -97,7 +106,7 @@ def upload_file(local_path: str, s3_key: str, content_type: str) -> None:
             Key=s3_key,
             ExtraArgs={
                 "ContentType": content_type,
-                "CacheControl": "public, max-age=31536000, immutable",
+                "CacheControl": UPLOAD_CACHE_CONTROL,
             },
         )
     except botocore.exceptions.ClientError as e:
@@ -118,7 +127,7 @@ def upload_bytes(s3_key: str, data: bytes, content_type: str) -> None:
             Key=s3_key,
             Body=io.BytesIO(data),
             ContentType=content_type,
-            CacheControl="public, max-age=31536000, immutable",
+            CacheControl=UPLOAD_CACHE_CONTROL,
         )
     except botocore.exceptions.ClientError as e:
         logger.error("S3 put_object failed for key '%s': %s", s3_key, e)
@@ -146,21 +155,11 @@ def delete_file(s3_key: str) -> None:
 def generate_presigned_url(s3_key: str) -> str:
     """
     Generate a time-limited presigned URL for direct file access.
-    Uses a dedicated client with AWS_PUBLIC_URL so the AWS V4 Signature is valid
-    for the public-facing domain (avoiding SignatureDoesNotMatch errors).
+    Uses the singleton s3_presign_client configured with AWS_PUBLIC_URL so the
+    AWS V4 Signature is valid for the public-facing domain (no SignatureDoesNotMatch).
     """
     try:
-        endpoint = AWS_PUBLIC_URL if AWS_PUBLIC_URL else AWS_ENDPOINT_URL
-        public_client = boto3.client(
-            "s3",
-            region_name=AWS_REGION,
-            aws_access_key_id=AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-            endpoint_url=endpoint,
-            config=Config(signature_version="s3v4"),
-        )
-        
-        url: str = public_client.generate_presigned_url(
+        url: str = s3_presign_client.generate_presigned_url(
             ClientMethod="get_object",
             Params={"Bucket": AWS_BUCKET_NAME, "Key": s3_key},
             ExpiresIn=MEDIA_URL_TTL_SECONDS,
@@ -178,8 +177,7 @@ def generate_public_url(s3_key: str) -> str:
     Generate a clean, static, cacheable public URL without any AWS signatures.
     Requires the underlying S3 bucket (or prefix) to have a Public Read policy.
     """
-    base_url = AWS_PUBLIC_URL.rstrip("/") if AWS_PUBLIC_URL else AWS_ENDPOINT_URL.rstrip("/")
-    # In MinIO/S3 path-style, the bucket name is part of the URL path
+    base_url = PRESIGN_ENDPOINT_URL.rstrip("/")
     return f"{base_url}/{AWS_BUCKET_NAME}/{s3_key}"
 
 

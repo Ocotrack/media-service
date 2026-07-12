@@ -24,6 +24,8 @@ from .compression import compress_image, compress_video_async
 from .config import (
     ALLOWED_EXTENSIONS,
     API_KEYS_MAP,
+    DOWNLOAD_CACHE_CONTROL,
+    DOWNLOAD_CONTENT_DISPOSITION,
     MAX_CONCURRENT_JOBS,
     MEDIA_URL_TTL_SECONDS,
 )
@@ -331,22 +333,8 @@ async def upload_media(
             folder=folder,
         )
 
-    # ---- Documents: store as-is (configurable extensions) ----
-    is_allowed_doc = (
-        content_type
-        in {
-            "application/pdf",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "application/vnd.ms-excel",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "application/xml",
-            "text/xml",
-            "text/plain",
-        }
-        or original_ext in ALLOWED_EXTENSIONS
-    )
-
-    if is_allowed_doc:
+    # ---- Documents: store as-is (extension-based allowlist) ----
+    if original_ext in ALLOWED_EXTENSIONS:
         ext = original_ext or "bin"
         s3_key = build_s3_key(client_id, folder, media_id, ext)
         tmp_path = f"/tmp/{media_id}.{ext}"
@@ -377,32 +365,38 @@ async def upload_media(
 
 
 @app.get(
-    "/media/url",
-    summary="Generate a URL for file access",
+    "/media/presign",
+    summary="Generate a presigned URL for direct file access",
+    description=(
+        "Returns a time-limited S3 presigned URL (default: 1 hour) or a static public URL. "
+        "The client uses this URL to access the file **directly from S3/MinIO**, "
+        "bypassing this service entirely for maximum performance. "
+        "Use this endpoint when the client can reach S3 directly (browsers, mobile apps)."
+    ),
     tags=["Media"],
     response_model=UrlResponse,
 )
-async def generate_media_url(
+async def presign_media(
     path: str = Query(..., description="S3 object key (path) of the media file"),
     public: bool = Query(
-        False, 
-        description="If true, returns a static URL without signatures (perfect for CDNs). Requires the S3 bucket/folder to be public."
+        False,
+        description="If true, returns a static URL without signatures (requires public bucket policy).",
     ),
     client_id: str = Depends(get_client_id),
 ):
     """
     Generate a URL for direct access to a file.
     If 'public' is False (default), generates a time-limited presigned URL.
-    If 'public' is True, generates a clean cacheable URL.
+    If 'public' is True, generates a clean cacheable URL (requires public bucket policy).
     """
     validate_path_ownership(path, client_id)
-    
+
     if public:
         url = generate_public_url(path)
         return {"url": url, "type": "public", "expires_in": None}
-    else:
-        url = generate_presigned_url(path)
-        return {"url": url, "type": "presigned", "expires_in": MEDIA_URL_TTL_SECONDS}
+
+    url = generate_presigned_url(path)
+    return {"url": url, "type": "presigned", "expires_in": MEDIA_URL_TTL_SECONDS}
 
 
 @app.delete(
@@ -423,7 +417,13 @@ async def delete_media(
 
 @app.get(
     "/media/download",
-    summary="Stream a media file for direct download",
+    summary="Stream a media file directly (proxy mode)",
+    description=(
+        "Proxies file content from S3 as an HTTP response with correct MIME type and Cache-Control headers. "
+        "Use this when the client cannot reach S3 directly, or when you need "
+        "to enforce server-side Cache-Control: private for sensitive files "
+        "(e.g. INE documents, contracts) without caching at the CDN layer."
+    ),
     tags=["Media"],
 )
 async def download_media(
@@ -440,9 +440,18 @@ async def download_media(
     if stream is None:
         raise HTTPException(status_code=404, detail="File not found in storage")
 
+    import mimetypes
+    mime_type, _ = mimetypes.guess_type(path)
+    mime_type = mime_type or "application/octet-stream"
+
     filename = os.path.basename(path)
+    disposition = f'{DOWNLOAD_CONTENT_DISPOSITION}; filename="{filename}"'
+
     return StreamingResponse(
         stream,
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        media_type=mime_type,
+        headers={
+            "Content-Disposition": disposition,
+            "Cache-Control": DOWNLOAD_CACHE_CONTROL,
+        },
     )

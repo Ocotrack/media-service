@@ -12,7 +12,12 @@ AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_ENDPOINT_URL = os.getenv("AWS_ENDPOINT_URL")# Optional: for MinIO / R2
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME", "media")
-AWS_PUBLIC_URL = os.getenv("AWS_PUBLIC_URL", "")# Optional: for CDN / public endpoint URL generation
+AWS_PUBLIC_URL = os.getenv("AWS_PUBLIC_URL", "")  # Optional: for CDN / public endpoint URL generation
+
+# The endpoint used to sign presigned URLs for public access.
+# Resolved once at startup: uses the public-facing domain when available,
+# otherwise falls back to the internal S3 endpoint.
+PRESIGN_ENDPOINT_URL = AWS_PUBLIC_URL or AWS_ENDPOINT_URL
 
 if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY:
     logger.warning(
@@ -66,3 +71,17 @@ ALLOWED_EXTENSIONS: set[str] = {
     for ext in _raw_extensions.split(",")
     if ext.strip()
 }
+
+# ================== Cache Control ==================
+# Controls Cache-Control header injected into S3 object metadata on upload.
+# Default: public, long-lived, immutable (safe because UUIDs are content-addressed).
+UPLOAD_CACHE_CONTROL = os.getenv("UPLOAD_CACHE_CONTROL", "public, max-age=31536000, immutable")
+
+# Controls Cache-Control header on GET /media/download responses.
+# Default: private (Cloudflare does NOT cache this; only the client browser does).
+DOWNLOAD_CACHE_CONTROL = os.getenv("DOWNLOAD_CACHE_CONTROL", "private, max-age=31536000, immutable")
+
+# Controls Content-Disposition on GET /media/download.
+# 'inline' → browser renders images/PDFs in-tab.
+# 'attachment' → browser always downloads the file.
+DOWNLOAD_CONTENT_DISPOSITION = os.getenv("DOWNLOAD_CONTENT_DISPOSITION", "inline")

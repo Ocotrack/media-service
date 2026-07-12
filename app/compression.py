@@ -24,9 +24,10 @@ def compress_image(raw: bytes) -> Tuple[bytes, str, str]:
     """
     image = Image.open(io.BytesIO(raw))
 
-    # Convert RGBA / palette modes to RGB before saving as WebP
-    if image.mode in ("RGBA", "P"):
-        image = image.convert("RGB")
+    # Convert Palette mode to RGBA to preserve transparency before saving as WebP.
+    # WebP supports alpha natively, so RGBA images are saved directly without conversion.
+    if image.mode == "P":
+        image = image.convert("RGBA")
 
     w, h = image.size
     max_dim = IMAGE_MAX_DIMENSION
