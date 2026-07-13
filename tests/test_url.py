@@ -11,7 +11,7 @@ FOREIGN_PATH = "other_client/uploads/some-uuid.webp"
 
 @pytest.mark.asyncio
 async def test_generate_url_returns_signed_url(client):
-    response = await client.get("/media/url?path=local_test/my-image.jpg", headers=VALID_HEADERS)
+    response = await client.get("/media/presign?path=local_test/my-image.jpg", headers=VALID_HEADERS)
     assert response.status_code == 200
     data = response.json()
     assert "url" in data
@@ -21,7 +21,7 @@ async def test_generate_url_returns_signed_url(client):
 
 @pytest.mark.asyncio
 async def test_generate_url_returns_public_url(client):
-    response = await client.get("/media/url?path=local_test/public-image.jpg&public=true", headers=VALID_HEADERS)
+    response = await client.get("/media/presign?path=local_test/public-image.jpg&public=true", headers=VALID_HEADERS)
     assert response.status_code == 200
     data = response.json()
     assert "url" in data
@@ -32,14 +32,14 @@ async def test_generate_url_returns_public_url(client):
 
 @pytest.mark.asyncio
 async def test_generate_url_requires_path_param(client):
-    response = await client.get("/media/url", headers=VALID_HEADERS)
+    response = await client.get("/media/presign", headers=VALID_HEADERS)
     assert response.status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_generate_url_for_foreign_path_returns_403(client):
     response = await client.get(
-        "/media/url",
+        "/media/presign",
         headers=VALID_HEADERS,
         params={"path": FOREIGN_PATH},
     )
@@ -49,6 +49,6 @@ async def test_generate_url_for_foreign_path_returns_403(client):
 @pytest.mark.asyncio
 async def test_generate_url_without_auth_returns_401(client):
     response = await client.get(
-        "/media/url", params={"path": OWNED_PATH}
+        "/media/presign", params={"path": OWNED_PATH}
     )
     assert response.status_code == 401
