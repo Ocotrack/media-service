@@ -13,7 +13,7 @@ async def test_missing_api_key_returns_401(client):
 @pytest.mark.asyncio
 async def test_invalid_api_key_returns_403(client):
     response = await client.get(
-        "/media/url",
+        "/media/presign",
         headers={"X-Api-Key": "invalid-key"},
         params={"path": "local_test/file.webp"},
     )
