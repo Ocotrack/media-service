@@ -1,3 +1,5 @@
+[English](README.md) | [Español](README.es.md)
+
 # Media service
 
 A self-hosted, S3-compatible microservice for **uploading, compressing, and managing media files** (images, videos, and documents) — built with FastAPI and Python 3.11.
@@ -131,10 +133,10 @@ All endpoints (except `/health`) require the `X-Api-Key` header.
 }
 ```
 
-### `GET /media/url` — Generate access URL
+### `GET /media/presign` — Generate access URL
 
 ```
-GET /media/url?path=my_app/uploads/uuid.webp&public=false
+GET /media/presign?path=my_app/uploads/uuid.webp&public=false
 X-Api-Key: mysecretkey
 ```
 
@@ -193,6 +195,9 @@ X-Api-Key: mysecretkey
 | `ALLOWED_EXTENSIONS`    | `pdf,xlsx,xls,docx,txt,xml` | Allowed document extensions                                   |
 | `MAX_CONCURRENT_JOBS`   | `2`                         | Max parallel FFmpeg processes                                 |
 | `MEDIA_URL_TTL_SECONDS` | `3600`                      | Presigned URL lifetime in seconds                             |
+| `UPLOAD_CACHE_CONTROL`  | `public, max-age=31536000, immutable` | Cache-Control header injected into S3 object metadata   |
+| `DOWNLOAD_CACHE_CONTROL`| `private, max-age=31536000, immutable`| Cache-Control header sent on GET /media/download        |
+| `DOWNLOAD_CONTENT_DISPOSITION` | `inline`               | Content-Disposition sent on GET /media/download               |
 | `PORT`                  | `8002`                      | Service port                                                  |
 
 ---
