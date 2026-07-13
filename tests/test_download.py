@@ -17,7 +17,7 @@ async def test_download_returns_binary_content(client):
     )
     assert response.status_code == 200
     assert response.content == b"binary-content"
-    assert response.headers["content-disposition"] == 'attachment; filename="some-uuid.webp"'
+    assert response.headers["content-disposition"] == 'inline; filename="some-uuid.webp"'
 
 
 @pytest.mark.asyncio
